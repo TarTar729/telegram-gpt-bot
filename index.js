@@ -18,6 +18,7 @@ app.get("/", (req, res) => {
 
 app.post("/webhook", async (req, res) => {
   const userText = req.body.text;
+  console.log("Received from Shortcut:", userText);
 
   try {
     const aiRes = await axios.post(
