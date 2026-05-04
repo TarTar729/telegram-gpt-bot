@@ -8,8 +8,8 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const USERS = [
-  123456789,
-  987654321
+  1807488416,
+  8091257985
 ];
 
 app.get("/", (req, res) => {
