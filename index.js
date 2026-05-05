@@ -16,19 +16,38 @@ const USERS = [
   8091257985
 ];
 
-// Connect to Redis
+// -------------------- REDIS --------------------
 const redis = createClient({
-  url: REDIS_URL
+  url: REDIS_URL,
+  socket: {
+    tls: true,
+    rejectUnauthorized: false
+  }
 });
 
-redis.connect().catch(console.error);
+// Prevent crash on Redis errors
+redis.on("error", (err) => {
+  console.error("Redis error:", err);
+});
+
+// Connect safely
+(async () => {
+  try {
+    await redis.connect();
+    console.log("Redis connected");
+  } catch (err) {
+    console.error("Redis connection failed:", err);
+  }
+})();
+
+// -------------------- ROUTES --------------------
 
 // Health check
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// Telegram message limit
+// Split long Telegram messages
 const MAX_LENGTH = 4000;
 
 function splitMessage(text) {
@@ -39,9 +58,10 @@ function splitMessage(text) {
   return parts;
 }
 
-// MAIN webhook
+// -------------------- MAIN WEBHOOK --------------------
 app.post("/webhook", async (req, res) => {
   const userText = req.body.text;
+
   console.log("Received from Shortcut:", userText);
 
   if (!userText) {
@@ -49,25 +69,23 @@ app.post("/webhook", async (req, res) => {
   }
 
   try {
-    // 👤 Use single user key (you can improve later)
     const userKey = "shortcut-user";
 
-    // 🔹 Load history from Redis
+    // Load memory
     const historyRaw = await redis.lRange(userKey, 0, -1);
     const history = historyRaw.map(msg => JSON.parse(msg));
 
-    // 🔹 Add new user message
+    // Add new message
     history.push({ role: "user", content: userText });
 
-    // 🔹 Limit history (keep last 10 messages)
-    const trimmedHistory = history.slice(-10);
+    const trimmed = history.slice(-10);
 
-    // 🔹 Send to OpenAI
+    // OpenAI request
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
         model: "gpt-4o-mini",
-        messages: trimmedHistory
+        messages: trimmed
       },
       {
         headers: {
@@ -80,34 +98,33 @@ app.post("/webhook", async (req, res) => {
     const answer = aiRes.data.choices[0].message.content;
     console.log("GPT answer:", answer);
 
-    // 🔹 Save conversation back to Redis
-    await redis.del(userKey); // clear old
-    for (const msg of trimmedHistory) {
+    // Save memory
+    await redis.del(userKey);
+
+    for (const msg of trimmed) {
       await redis.rPush(userKey, JSON.stringify(msg));
     }
 
-    await redis.rPush(userKey, JSON.stringify({
-      role: "assistant",
-      content: answer
-    }));
+    await redis.rPush(
+      userKey,
+      JSON.stringify({ role: "assistant", content: answer })
+    );
 
-    // 🔹 Split long messages
+    // Send to Telegram (split if needed)
     const messages = splitMessage(answer);
 
-    // 🔹 Send to Telegram
     for (const userId of USERS) {
-      for (let i = 0; i < messages.length; i++) {
+      for (const part of messages) {
         await axios.post(
           `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
           {
             chat_id: userId,
-            text: `Part ${i + 1}/${messages.length}\n\n${messages[i]}`
+            text: part
           }
         );
       }
     }
 
-    // 🔹 Respond to Shortcut
     return res.json({
       status: "ok",
       received: userText
@@ -115,11 +132,11 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Something went wrong" });
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
-// Start server
+// -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
