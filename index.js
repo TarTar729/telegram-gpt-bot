@@ -5,18 +5,18 @@ const { createClient } = require("redis");
 const app = express();
 app.use(express.json());
 
-// ENV variables (set in Render)
+// ENV VARIABLES (Render)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const REDIS_URL = process.env.REDIS_URL;
 
-// Telegram users
+// TELEGRAM USERS
 const USERS = [
   1807488416,
   8091257985
 ];
 
-// -------------------- REDIS --------------------
+// REDIS CLIENT
 const redis = createClient({
   url: REDIS_URL,
   socket: {
@@ -25,67 +25,102 @@ const redis = createClient({
   }
 });
 
-// Prevent crash on Redis errors
 redis.on("error", (err) => {
   console.error("Redis error:", err);
 });
 
-// Connect safely
-(async () => {
-  try {
-    await redis.connect();
-    console.log("Redis connected");
-  } catch (err) {
-    console.error("Redis connection failed:", err);
-  }
-})();
+redis.connect().then(() => {
+  console.log("Redis connected");
+});
 
-// -------------------- ROUTES --------------------
+// 🔹 KWIRTMAK REFERENCE (COMPRESSED)
+const REFERENCE = `
+KWIRTMAK CASE SUMMARY:
 
-// Health check
+- Mission: Innovation-driven, customer-focused manufacturing
+- Vision: Leader in sustainable additive manufacturing
+- Values: Customer focus, reliability, teamwork, profit
+
+- Governance: Strong board + Audit, Risk & CSR committees
+
+- Key risks:
+  Economic conditions, demand volatility, product complexity,
+  supplier dependence, legal/compliance
+
+- Financials:
+  Revenue ↓, profit ↓, costs ↓
+  Issues: high debt, falling cash, currency losses
+
+- Position:
+  Strong equity + assets, but weak cash and high borrowings
+
+- Competitor (Breskko):
+  Outperforming (revenue ↑, profit ↑)
+
+- Sustainability:
+  Less waste, lower emissions, energy efficiency
+
+- Opportunities:
+  Medical 3D printing, carbon fibre demand
+
+- Core themes:
+  Innovation, competition, declining revenue,
+  high costs, sustainability, supply chain risk
+`;
+
+// HEALTH CHECK
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// Split long Telegram messages
-const MAX_LENGTH = 4000;
-
-function splitMessage(text) {
+// 🔹 SPLIT LONG TELEGRAM MESSAGES
+function splitMessage(text, maxLength = 4000) {
   const parts = [];
-  for (let i = 0; i < text.length; i += MAX_LENGTH) {
-    parts.push(text.slice(i, i + MAX_LENGTH));
+  for (let i = 0; i < text.length; i += maxLength) {
+    parts.push(text.slice(i, i + maxLength));
   }
   return parts;
 }
 
-// -------------------- MAIN WEBHOOK --------------------
+// 🔹 MAIN WEBHOOK
 app.post("/webhook", async (req, res) => {
   const userText = req.body.text;
-
-  console.log("Received from Shortcut:", userText);
+  console.log("Received:", userText);
 
   if (!userText) {
     return res.status(400).json({ error: "No text provided" });
   }
 
   try {
-    const userKey = "shortcut-user";
+    // 🔹 GET CHAT HISTORY FROM REDIS
+    let history = await redis.get("chat_history");
+    let messages = history ? JSON.parse(history) : [];
 
-    // Load memory
-    const historyRaw = await redis.lRange(userKey, 0, -1);
-    const history = historyRaw.map(msg => JSON.parse(msg));
+    // ADD USER MESSAGE
+    messages.push({ role: "user", content: userText });
 
-    // Add new message
-    history.push({ role: "user", content: userText });
+    // LIMIT HISTORY (last 10 messages)
+    const trimmed = messages.slice(-10);
 
-    const trimmed = history.slice(-10);
-
-    // OpenAI request
+    // 🔹 OPENAI CALL
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
         model: "gpt-4o-mini",
-        messages: trimmed
+        messages: [
+          {
+            role: "system",
+            content: `
+You are a helpful exam assistant.
+
+Use the reference material below when relevant, but do NOT rely only on it.
+Combine it with your general knowledge.
+
+${REFERENCE}
+            `
+          },
+          ...trimmed
+        ]
       },
       {
         headers: {
@@ -96,25 +131,18 @@ app.post("/webhook", async (req, res) => {
     );
 
     const answer = aiRes.data.choices[0].message.content;
+
     console.log("GPT answer:", answer);
 
-    // Save memory
-    await redis.del(userKey);
+    // SAVE UPDATED HISTORY
+    messages.push({ role: "assistant", content: answer });
+    await redis.set("chat_history", JSON.stringify(messages));
 
-    for (const msg of trimmed) {
-      await redis.rPush(userKey, JSON.stringify(msg));
-    }
-
-    await redis.rPush(
-      userKey,
-      JSON.stringify({ role: "assistant", content: answer })
-    );
-
-    // Send to Telegram (split if needed)
-    const messages = splitMessage(answer);
+    // 🔹 SEND TO TELEGRAM (SPLIT IF TOO LONG)
+    const parts = splitMessage(answer);
 
     for (const userId of USERS) {
-      for (const part of messages) {
+      for (const part of parts) {
         await axios.post(
           `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
           {
@@ -125,18 +153,15 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    return res.json({
-      status: "ok",
-      received: userText
-    });
+    res.sendStatus(200);
 
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Server error" });
+    res.sendStatus(500);
   }
 });
 
-// -------------------- START SERVER --------------------
+// START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
