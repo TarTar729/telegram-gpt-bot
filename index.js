@@ -19,12 +19,22 @@ app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
+// Helper: split long messages (Telegram limit ~4096)
+const MAX_LENGTH = 4000;
+
+function splitMessage(text) {
+  const parts = [];
+  for (let i = 0; i < text.length; i += MAX_LENGTH) {
+    parts.push(text.slice(i, i + MAX_LENGTH));
+  }
+  return parts;
+}
+
 // Main webhook
 app.post("/webhook", async (req, res) => {
   const userText = req.body.text;
   console.log("Received from Shortcut:", userText);
 
-  // Safety check
   if (!userText) {
     return res.status(400).json({ error: "No text provided" });
   }
@@ -46,18 +56,22 @@ app.post("/webhook", async (req, res) => {
     );
 
     const answer = aiRes.data.choices[0].message.content;
-
     console.log("GPT answer:", answer);
+
+    // 🔹 Split long messages
+    const messages = splitMessage(answer);
 
     // 🔹 Send to Telegram users
     for (const userId of USERS) {
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-        {
-          chat_id: userId,
-          text: answer
-        }
-      );
+      for (let i = 0; i < messages.length; i++) {
+        await axios.post(
+          `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+          {
+            chat_id: userId,
+            text: `Part ${i + 1}/${messages.length}\n\n${messages[i]}`
+          }
+        );
+      }
     }
 
     // 🔹 Respond back to Shortcut
@@ -72,7 +86,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// Start server (Render uses dynamic port)
+// Start server
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
