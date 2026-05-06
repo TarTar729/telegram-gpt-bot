@@ -5,7 +5,7 @@ const { createClient } = require("redis");
 const app = express();
 app.use(express.json());
 
-// ENV VARIABLES (Render)
+// ENV VARIABLES (set in Render)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const REDIS_URL = process.env.REDIS_URL;
@@ -16,7 +16,7 @@ const USERS = [
   8091257985
 ];
 
-// REDIS CLIENT
+// 🔹 REDIS SETUP
 const redis = createClient({
   url: REDIS_URL,
   socket: {
@@ -37,38 +37,16 @@ redis.connect().then(() => {
 const REFERENCE = `
 KWIRTMAK CASE SUMMARY:
 
-- Mission: Innovation-driven, customer-focused manufacturing
-- Vision: Leader in sustainable additive manufacturing
-- Values: Customer focus, reliability, teamwork, profit
-
-- Governance: Strong board + Audit, Risk & CSR committees
-
-- Key risks:
-  Economic conditions, demand volatility, product complexity,
-  supplier dependence, legal/compliance
-
-- Financials:
-  Revenue ↓, profit ↓, costs ↓
-  Issues: high debt, falling cash, currency losses
-
-- Position:
-  Strong equity + assets, but weak cash and high borrowings
-
-- Competitor (Breskko):
-  Outperforming (revenue ↑, profit ↑)
-
-- Sustainability:
-  Less waste, lower emissions, energy efficiency
-
-- Opportunities:
-  Medical 3D printing, carbon fibre demand
-
-- Core themes:
-  Innovation, competition, declining revenue,
-  high costs, sustainability, supply chain risk
+- Innovation-driven, customer-focused manufacturing
+- Declining revenue and profit
+- Strong competitor (Breskko outperforming)
+- High debt, falling cash
+- Strong R&D and sustainability positioning
+- Risks: demand volatility, supply chain, compliance
+- Opportunities: medical 3D printing, carbon fibre
 `;
 
-// HEALTH CHECK
+// 🔹 HEALTH CHECK
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
@@ -92,14 +70,14 @@ app.post("/webhook", async (req, res) => {
   }
 
   try {
-    // 🔹 GET CHAT HISTORY FROM REDIS
+    // 🔹 GET HISTORY
     let history = await redis.get("chat_history");
     let messages = history ? JSON.parse(history) : [];
 
     // ADD USER MESSAGE
     messages.push({ role: "user", content: userText });
 
-    // LIMIT HISTORY (last 10 messages)
+    // LIMIT HISTORY
     const trimmed = messages.slice(-10);
 
     // 🔹 OPENAI CALL
@@ -111,11 +89,33 @@ app.post("/webhook", async (req, res) => {
           {
             role: "system",
             content: `
-You are a helpful exam assistant.
+You are a CIMA exam assistant.
 
-Use the reference material below when relevant, but do NOT rely only on it.
-Combine it with your general knowledge.
+Your answers MUST follow CIMA marking criteria:
 
+- Always apply points to Kwirtmak
+- Avoid generic theory
+- Be concise and structured
+- Maximise marks per sentence
+
+Structure:
+
+1. Heading
+2. Explanation
+3. Application to Kwirtmak
+4. Impact / Evaluation
+
+Adapt to command words:
+- Evaluate → pros, cons, judgement
+- Recommend → decision + justification
+- Analyse → causes
+- Discuss → balanced view
+
+Avoid long paragraphs and repetition.
+
+Write like a CIMA examiner expects.
+
+Reference:
 ${REFERENCE}
             `
           },
@@ -134,11 +134,11 @@ ${REFERENCE}
 
     console.log("GPT answer:", answer);
 
-    // SAVE UPDATED HISTORY
+    // SAVE HISTORY
     messages.push({ role: "assistant", content: answer });
     await redis.set("chat_history", JSON.stringify(messages));
 
-    // 🔹 SEND TO TELEGRAM (SPLIT IF TOO LONG)
+    // 🔹 SEND TO TELEGRAM
     const parts = splitMessage(answer);
 
     for (const userId of USERS) {
@@ -161,7 +161,7 @@ ${REFERENCE}
   }
 });
 
-// START SERVER
+// 🔹 START SERVER
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
