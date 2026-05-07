@@ -27,28 +27,7 @@ redis.on("error", err => console.error("Redis Error:", err));
   console.log("Redis connected");
 })();
 
-// ==================== REFERENCE ====================
-
-const REFERENCE = `
-KWIRTMAK CASE SUMMARY:
-- Innovation-driven manufacturing
-- Declining revenue and profit
-- High debt and falling cash
-- Strong competitor pressure
-- Opportunities: medical 3D printing
-`;
-
-// ==================== HELPERS ====================
-
-function splitMessage(text, size = 4000) {
-  const parts = [];
-  for (let i = 0; i < text.length; i += size) {
-    parts.push(text.substring(i, i + size));
-  }
-  return parts;
-}
-
-// ==================== HEALTH CHECK ====================
+// ==================== HEALTH ====================
 
 app.get("/", (req, res) => {
   res.send("Bot is running");
@@ -60,31 +39,52 @@ app.post("/webhook", async (req, res) => {
   try {
     console.log("Update received");
 
-    const update = req.body;
-
-    // Accept different Telegram update types safely
-    const message = update.message || update.edited_message;
+    const message = req.body.message || req.body.edited_message;
 
     if (!message || !message.text) {
-      console.log("No text message");
       return res.sendStatus(200);
     }
 
     const chatId = message.chat.id;
     const userText = message.text;
 
-    console.log("Chat ID:", chatId);
-    console.log("User:", userText);
+    console.log("Chat:", chatId);
+    console.log("Text:", userText);
 
-    // ==================== CHAT HISTORY ====================
+    // ==================== STEP 1: STORE INPUTS ====================
 
-    let history = await redis.get(`chat_${chatId}`);
-    let messages = history ? JSON.parse(history) : [];
+    let temp = await redis.get(`temp_${chatId}`);
+    temp = temp ? JSON.parse(temp) : [];
 
-    messages.push({ role: "user", content: userText });
-    messages = messages.slice(-10);
+    temp.push(userText);
 
-    // ==================== OPENAI ====================
+    console.log("Stored messages:", temp.length);
+
+    // Wait until we have 2 messages
+    if (temp.length < 2) {
+      await redis.set(`temp_${chatId}`, JSON.stringify(temp));
+
+      await axios.post(
+        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+        {
+          chat_id: chatId,
+          text: "📥 Message received. Waiting for second input..."
+        }
+      );
+
+      return res.sendStatus(200);
+    }
+
+    // ==================== STEP 2: COMBINE INPUT ====================
+
+    const combinedInput = temp.join("\n\n");
+
+    // clear temp storage
+    await redis.del(`temp_${chatId}`);
+
+    console.log("Sending combined input to GPT");
+
+    // ==================== STEP 3: GPT REQUEST ====================
 
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -94,19 +94,26 @@ app.post("/webhook", async (req, res) => {
           {
             role: "system",
             content: `
-You are a CIMA exam assistant.
+You are a CIMA Strategic Case Study (SCS) examiner.
 
-Follow strict exam structure:
+You must:
+- Write structured exam answers
+- Use headings
+- Apply analysis to the case
+- Provide evaluation and judgement
+- Be concise but deep
+
+Structure:
 1. Heading
-2. Explanation
+2. Analysis
 3. Application to case
-4. Evaluation
-
-Use the reference:
-${REFERENCE}
+4. Evaluation / Conclusion
             `
           },
-          ...messages
+          {
+            role: "user",
+            content: combinedInput
+          }
         ],
         temperature: 0.7
       },
@@ -120,15 +127,9 @@ ${REFERENCE}
 
     const answer = aiRes.data.choices[0].message.content;
 
-    console.log("GPT response generated");
+    console.log("GPT answer generated");
 
-    // ==================== SAVE HISTORY ====================
-
-    messages.push({ role: "assistant", content: answer });
-
-    await redis.set(`chat_${chatId}`, JSON.stringify(messages));
-
-    // ==================== SEND TO TELEGRAM ====================
+    // ==================== STEP 4: SEND RESPONSE ====================
 
     const parts = splitMessage(answer);
 
@@ -142,17 +143,25 @@ ${REFERENCE}
       );
     }
 
-    console.log("Reply sent");
-
     return res.sendStatus(200);
 
   } catch (err) {
-    console.error("Webhook error:", err.response?.data || err.message);
+    console.error("ERROR:", err.response?.data || err.message);
 
-    // IMPORTANT: always return 200 so Telegram doesn't break webhook
+    // IMPORTANT: always return 200 so Telegram doesn't retry endlessly
     return res.sendStatus(200);
   }
 });
+
+// ==================== HELPERS ====================
+
+function splitMessage(text, size = 4000) {
+  const parts = [];
+  for (let i = 0; i < text.length; i += size) {
+    parts.push(text.substring(i, i + size));
+  }
+  return parts;
+}
 
 // ==================== START SERVER ====================
 
