@@ -5,18 +5,13 @@ const { createClient } = require("redis");
 const app = express();
 app.use(express.json());
 
-// ENV VARIABLES (set in Render)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const REDIS_URL = process.env.REDIS_URL;
 
-// TELEGRAM USERS
-const USERS = [
-  1807488416,
-  8091257985
-];
+const USERS = [1807488416, 8091257985];
 
-// 🔹 REDIS SETUP
+// 🔹 Redis
 const redis = createClient({
   url: REDIS_URL,
   socket: {
@@ -25,62 +20,65 @@ const redis = createClient({
   }
 });
 
-redis.on("error", (err) => {
-  console.error("Redis error:", err);
-});
+redis.on("error", (err) => console.error("Redis error:", err));
+redis.connect().then(() => console.log("Redis connected"));
 
-redis.connect().then(() => {
-  console.log("Redis connected");
-});
-
-// 🔹 KWIRTMAK REFERENCE (COMPRESSED)
+// 🔹 CIMA REFERENCE (compressed)
 const REFERENCE = `
-KWIRTMAK CASE SUMMARY:
-
-- Innovation-driven, customer-focused manufacturing
-- Declining revenue and profit
-- Strong competitor (Breskko outperforming)
-- High debt, falling cash
-- Strong R&D and sustainability positioning
-- Risks: demand volatility, supply chain, compliance
-- Opportunities: medical 3D printing, carbon fibre
+Kwirtmak case: declining revenue, strong competitor (Breskko),
+high debt, innovation strength, sustainability advantage,
+growth opportunities in medical + carbon fibre.
 `;
 
-// 🔹 HEALTH CHECK
+// 🔹 HOME
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// 🔹 SPLIT LONG TELEGRAM MESSAGES
-function splitMessage(text, maxLength = 4000) {
+// 🔹 HELP FUNCTION
+function splitMessage(text, max = 4000) {
   const parts = [];
-  for (let i = 0; i < text.length; i += maxLength) {
-    parts.push(text.slice(i, i + maxLength));
+  for (let i = 0; i < text.length; i += max) {
+    parts.push(text.slice(i, i + max));
   }
   return parts;
 }
 
-// 🔹 MAIN WEBHOOK
+// 🔹 WEBHOOK
 app.post("/webhook", async (req, res) => {
   const userText = req.body.text;
+  const userId = req.body.userId || "default";
+
   console.log("Received:", userText);
 
-  if (!userText) {
-    return res.status(400).json({ error: "No text provided" });
-  }
+  if (!userText) return res.sendStatus(400);
 
   try {
-    // 🔹 GET HISTORY
-    let history = await redis.get("chat_history");
-    let messages = history ? JSON.parse(history) : [];
+    // 🔹 LOAD PENDING CONTEXT
+    let pending = await redis.get(`pending:${userId}`);
+    pending = pending ? JSON.parse(pending) : [];
 
-    // ADD USER MESSAGE
-    messages.push({ role: "user", content: userText });
+    // 🔹 ADD NEW INPUT (image OCR text)
+    pending.push(userText);
 
-    // LIMIT HISTORY
-    const trimmed = messages.slice(-10);
+    console.log("Pending items:", pending.length);
 
-    // 🔹 OPENAI CALL
+    // 🔥 WAIT FOR 2 INPUTS BEFORE ANSWERING
+    if (pending.length < 2) {
+      await redis.set(`pending:${userId}`, JSON.stringify(pending));
+      return res.json({
+        status: "waiting",
+        message: "Image stored, waiting for next input..."
+      });
+    }
+
+    // 🔹 COMBINE CONTEXT
+    const combined = pending.join("\n\n");
+
+    // CLEAR MEMORY
+    await redis.del(`pending:${userId}`);
+
+    // 🔹 CALL GPT
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -91,35 +89,19 @@ app.post("/webhook", async (req, res) => {
             content: `
 You are a CIMA exam assistant.
 
-Your answers MUST follow CIMA marking criteria:
-
-- Always apply points to Kwirtmak
-- Avoid generic theory
-- Be concise and structured
-- Maximise marks per sentence
-
-Structure:
-
-1. Heading
-2. Explanation
-3. Application to Kwirtmak
-4. Impact / Evaluation
-
-Adapt to command words:
-- Evaluate → pros, cons, judgement
-- Recommend → decision + justification
-- Analyse → causes
-- Discuss → balanced view
-
-Avoid long paragraphs and repetition.
-
-Write like a CIMA examiner expects.
+Always:
+- Apply answers to Kwirtmak
+- Use structured exam format
+- Be concise and analytical
 
 Reference:
 ${REFERENCE}
             `
           },
-          ...trimmed
+          {
+            role: "user",
+            content: combined
+          }
         ]
       },
       {
@@ -132,21 +114,17 @@ ${REFERENCE}
 
     const answer = aiRes.data.choices[0].message.content;
 
-    console.log("GPT answer:", answer);
+    console.log("GPT:", answer);
 
-    // SAVE HISTORY
-    messages.push({ role: "assistant", content: answer });
-    await redis.set("chat_history", JSON.stringify(messages));
-
-    // 🔹 SEND TO TELEGRAM
+    // 🔹 SEND RESPONSE
     const parts = splitMessage(answer);
 
-    for (const userId of USERS) {
+    for (const id of USERS) {
       for (const part of parts) {
         await axios.post(
           `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
           {
-            chat_id: userId,
+            chat_id: id,
             text: part
           }
         );
@@ -156,14 +134,13 @@ ${REFERENCE}
     res.sendStatus(200);
 
   } catch (err) {
-    console.error("ERROR:", err.response?.data || err.message);
+    console.error(err.response?.data || err.message);
     res.sendStatus(500);
   }
 });
 
-// 🔹 START SERVER
+// 🔹 START
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port", PORT);
 });
