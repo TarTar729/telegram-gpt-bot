@@ -3,25 +3,34 @@ const axios = require("axios");
 
 const app = express();
 
-// ==================== HEALTH ====================
+// IMPORTANT: allows JSON body from iPhone Shortcut
+app.use(express.json());
+
+// ==================== HEALTH CHECK ====================
 
 app.get("/", (req, res) => {
-  res.send("Bot is running");
+  res.send("GPT Shortcut Bot is running");
 });
 
-// ==================== MAIN SHORTCUT ENDPOINT ====================
+// ==================== MAIN ENDPOINT ====================
+// Shortcut → POST JSON → GPT → response back
 
-app.get("/webhook", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
-    const userText = req.query.text;
+    console.log("Request received:", req.body);
+
+    // Accept text from Shortcut
+    const userText = req.body.text;
 
     if (!userText) {
-      return res.status(400).send("Missing ?text=");
+      return res.status(400).json({
+        error: "Missing 'text' in request body"
+      });
     }
 
-    console.log("Received:", userText);
+    console.log("User input:", userText);
 
-    // ==================== OPENAI CALL ====================
+    // ==================== OPENAI REQUEST ====================
 
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -33,12 +42,18 @@ app.get("/webhook", async (req, res) => {
             content: `
 You are a CIMA Strategic Case Study (SCS) examiner.
 
-Write:
-- Structured answer
-- Headings
-- Deep analysis
-- Application to case
-- Evaluation and judgement
+You MUST:
+- Write structured answers
+- Use headings
+- Apply analysis to case material
+- Provide evaluation and judgement
+- Be concise but deep
+
+Structure:
+1. Heading
+2. Analysis
+3. Application to case
+4. Evaluation / Conclusion
             `
           },
           {
@@ -58,17 +73,20 @@ Write:
 
     const answer = aiRes.data.choices[0].message.content;
 
-    console.log("GPT done");
+    console.log("GPT response generated");
 
-    // ==================== RETURN DIRECTLY TO SHORTCUT ====================
+    // ==================== RETURN TO SHORTCUT ====================
 
-    res.json({
+    return res.json({
       answer: answer
     });
 
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).send("Error");
+    console.error("ERROR:", err.response?.data || err.message);
+
+    return res.status(500).json({
+      error: "Server error"
+    });
   }
 });
 
