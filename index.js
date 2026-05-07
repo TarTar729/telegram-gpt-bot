@@ -3,10 +3,9 @@ const axios = require("axios");
 const { createClient } = require("redis");
 
 const app = express();
-
 app.use(express.json());
 
-// ==================== ENV VARIABLES ====================
+// ==================== ENV ====================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -21,9 +20,7 @@ const redis = createClient({
   }
 });
 
-redis.on("error", err => {
-  console.error("Redis Error:", err);
-});
+redis.on("error", err => console.error("Redis Error:", err));
 
 (async () => {
   await redis.connect();
@@ -34,38 +31,20 @@ redis.on("error", err => {
 
 const REFERENCE = `
 KWIRTMAK CASE SUMMARY:
-- Mission: Innovation-driven, customer-focused manufacturing
-- Vision: Leader in sustainable additive manufacturing
-- Values: Customer focus, reliability, teamwork, profit
-- Governance: Strong board + Audit, Risk & CSR committees
-- Key risks:
-  Economic conditions, demand volatility, product complexity,
-  supplier dependence, legal/compliance
-- Financials:
-  Revenue ↓, profit ↓, costs ↓
-  Issues: high debt, falling cash, currency losses
-- Position:
-  Strong equity + assets, but weak cash and high borrowings
-- Competitor (Breskko):
-  Outperforming (revenue ↑, profit ↑)
-- Sustainability:
-  Less waste, lower emissions, energy efficiency
-- Opportunities:
-  Medical 3D printing, carbon fibre demand
-- Core themes:
-  Innovation, competition, declining revenue,
-  high costs, sustainability, supply chain risk
+- Innovation-driven manufacturing
+- Declining revenue and profit
+- High debt and falling cash
+- Strong competitor pressure
+- Opportunities: medical 3D printing
 `;
 
 // ==================== HELPERS ====================
 
 function splitMessage(text, size = 4000) {
   const parts = [];
-
   for (let i = 0; i < text.length; i += size) {
     parts.push(text.substring(i, i + size));
   }
-
   return parts;
 }
 
@@ -75,17 +54,19 @@ app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// ==================== TELEGRAM WEBHOOK ====================
+// ==================== WEBHOOK ====================
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Incoming update received");
+    console.log("Update received");
 
-    const message = req.body.message;
+    const update = req.body;
 
-    // Ignore non-text messages
+    // Accept different Telegram update types safely
+    const message = update.message || update.edited_message;
+
     if (!message || !message.text) {
-      console.log("No text message found");
+      console.log("No text message");
       return res.sendStatus(200);
     }
 
@@ -93,23 +74,17 @@ app.post("/webhook", async (req, res) => {
     const userText = message.text;
 
     console.log("Chat ID:", chatId);
-    console.log("User message:", userText);
+    console.log("User:", userText);
 
-    // ==================== LOAD CHAT HISTORY ====================
+    // ==================== CHAT HISTORY ====================
 
     let history = await redis.get(`chat_${chatId}`);
     let messages = history ? JSON.parse(history) : [];
 
-    // Add latest user message
-    messages.push({
-      role: "user",
-      content: userText
-    });
-
-    // Keep only last 10 messages
+    messages.push({ role: "user", content: userText });
     messages = messages.slice(-10);
 
-    // ==================== OPENAI REQUEST ====================
+    // ==================== OPENAI ====================
 
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -121,32 +96,13 @@ app.post("/webhook", async (req, res) => {
             content: `
 You are a CIMA exam assistant.
 
-Your answers MUST follow CIMA marking criteria:
-- Always apply points to Kwirtmak
-- Avoid generic theory
-- Be concise and structured
-- Maximise marks per sentence
-
-Structure:
+Follow strict exam structure:
 1. Heading
 2. Explanation
-3. Application to Kwirtmak
-4. Impact / Evaluation
+3. Application to case
+4. Evaluation
 
-Adapt to command words:
-- Evaluate → pros, cons, judgement
-- Recommend → decision + justification
-- Analyse → causes
-- Discuss → balanced view
-
-Avoid long paragraphs and repetition.
-
-Use the reference material below when relevant, but do NOT rely only on it.
-Combine it with your general knowledge.
-
-Write like a CIMA examiner expects.
-
-Reference:
+Use the reference:
 ${REFERENCE}
             `
           },
@@ -164,14 +120,11 @@ ${REFERENCE}
 
     const answer = aiRes.data.choices[0].message.content;
 
-    console.log("GPT answer generated");
+    console.log("GPT response generated");
 
-    // ==================== SAVE CHAT HISTORY ====================
+    // ==================== SAVE HISTORY ====================
 
-    messages.push({
-      role: "assistant",
-      content: answer
-    });
+    messages.push({ role: "assistant", content: answer });
 
     await redis.set(`chat_${chatId}`, JSON.stringify(messages));
 
@@ -189,15 +142,15 @@ ${REFERENCE}
       );
     }
 
-    console.log("Reply sent successfully");
+    console.log("Reply sent");
 
-    res.sendStatus(200);
+    return res.sendStatus(200);
 
   } catch (err) {
-    console.error("ERROR:");
-    console.error(err.response?.data || err.message);
+    console.error("Webhook error:", err.response?.data || err.message);
 
-    res.sendStatus(500);
+    // IMPORTANT: always return 200 so Telegram doesn't break webhook
+    return res.sendStatus(200);
   }
 });
 
