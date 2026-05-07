@@ -2,35 +2,58 @@ const express = require("express");
 const axios = require("axios");
 
 const app = express();
-
-// IMPORTANT: allows JSON body from iPhone Shortcut
 app.use(express.json());
 
-// ==================== HEALTH CHECK ====================
+// ================= ENV =================
+
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// ================= HEALTH CHECK =================
 
 app.get("/", (req, res) => {
-  res.send("GPT Shortcut Bot is running");
+  res.send("GPT Shortcut → Telegram Bot is running");
 });
 
-// ==================== MAIN ENDPOINT ====================
-// Shortcut → POST JSON → GPT → response back
+// ================= INPUT CLEANING =================
+
+function cleanText(text) {
+  if (!text) return "";
+
+  return text
+    // remove excessive new lines
+    .replace(/\n{2,}/g, "\n")
+    // remove common OCR/PDF noise
+    .replace(/Q\s*Search/gi, "")
+    .replace(/PDF/gi, "")
+    .replace(/Google Translate/gi, "")
+    .replace(/KAPLAN PUBLISHING/gi, "")
+    .replace(/\bPage\s*\d+\b/gi, "")
+    // remove standalone single letters like "N"
+    .replace(/\b[A-Z]\b/g, "")
+    // trim
+    .trim();
+}
+
+// ================= WEBHOOK =================
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Request received:", req.body);
+    console.log("Raw input:", req.body);
 
-    // Accept text from Shortcut
-    const userText = req.body.text;
+    let userText = req.body.text;
 
     if (!userText) {
-      return res.status(400).json({
-        error: "Missing 'text' in request body"
-      });
+      return res.status(400).json({ error: "Missing text" });
     }
 
-    console.log("User input:", userText);
+    // 🔥 CLEAN INPUT FIRST
+    userText = cleanText(userText);
 
-    // ==================== OPENAI REQUEST ====================
+    console.log("Cleaned input:", userText);
+
+    // ================= GPT REQUEST =================
 
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -42,12 +65,12 @@ app.post("/webhook", async (req, res) => {
             content: `
 You are a CIMA Strategic Case Study (SCS) examiner.
 
-You MUST:
-- Write structured answers
-- Use headings
-- Apply analysis to case material
+You must:
+- Write structured exam answers
+- Use clear headings
+- Apply analysis to the case
 - Provide evaluation and judgement
-- Be concise but deep
+- Be concise but high quality
 
 Structure:
 1. Heading
@@ -65,7 +88,7 @@ Structure:
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
           "Content-Type": "application/json"
         }
       }
@@ -75,11 +98,20 @@ Structure:
 
     console.log("GPT response generated");
 
-    // ==================== RETURN TO SHORTCUT ====================
+    // ================= SEND TO TELEGRAM =================
 
-    return res.json({
-      answer: answer
-    });
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+      {
+        chat_id: TELEGRAM_CHAT_ID,
+        text: answer,
+        parse_mode: "Markdown"
+      }
+    );
+
+    console.log("Sent to Telegram");
+
+    return res.json({ ok: true });
 
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
@@ -90,7 +122,7 @@ Structure:
   }
 });
 
-// ==================== START SERVER ====================
+// ================= START SERVER =================
 
 const PORT = process.env.PORT || 3000;
 
