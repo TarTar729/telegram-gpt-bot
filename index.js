@@ -1,98 +1,118 @@
+require("dotenv").config();
+
 const express = require("express");
 const axios = require("axios");
 const { createClient } = require("redis");
 
 const app = express();
+
 app.use(express.json());
 
-// ENV
+// ==================== ENV VARIABLES ====================
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const REDIS_URL = process.env.REDIS_URL;
 
-// Users (optional for future Telegram expansion)
-const USERS = ["me"];
+// ==================== REDIS ====================
 
-// -------------------- REDIS --------------------
 const redis = createClient({
   url: REDIS_URL,
   socket: {
-    tls: true,
-    rejectUnauthorized: false
+    reconnectStrategy: retries => Math.min(retries * 100, 3000)
   }
 });
 
-redis.on("error", (err) => {
-  console.error("Redis error:", err);
+redis.on("error", err => {
+  console.error("Redis Error:", err);
 });
 
-redis.connect().then(() => {
+(async () => {
+  await redis.connect();
   console.log("Redis connected");
-});
+})();
 
-// -------------------- CIMA REFERENCE --------------------
+// ==================== REFERENCE ====================
+
 const REFERENCE = `
-Kwirtmak Case Summary:
-- Innovation-driven manufacturing company
-- Declining revenue and profit
-- Strong competitor: Breskko outperforming
-- High debt and pressure on cash flow
-- Strong R&D and sustainability advantage
-- Opportunities: medical 3D printing, carbon fibre
-- Risks: competition, demand volatility, supply chain
+KWIRTMAK CASE SUMMARY:
+- Mission: Innovation-driven, customer-focused manufacturing
+- Vision: Leader in sustainable additive manufacturing
+- Values: Customer focus, reliability, teamwork, profit
+- Governance: Strong board + Audit, Risk & CSR committees
+- Key risks:
+  Economic conditions, demand volatility, product complexity,
+  supplier dependence, legal/compliance
+- Financials:
+  Revenue ↓, profit ↓, costs ↓
+  Issues: high debt, falling cash, currency losses
+- Position:
+  Strong equity + assets, but weak cash and high borrowings
+- Competitor (Breskko):
+  Outperforming (revenue ↑, profit ↑)
+- Sustainability:
+  Less waste, lower emissions, energy efficiency
+- Opportunities:
+  Medical 3D printing, carbon fibre demand
+- Core themes:
+  Innovation, competition, declining revenue,
+  high costs, sustainability, supply chain risk
 `;
 
-// -------------------- HELPERS --------------------
-function splitMessage(text, max = 4000) {
+// ==================== HELPERS ====================
+
+function splitMessage(text, size = 4000) {
   const parts = [];
-  for (let i = 0; i < text.length; i += max) {
-    parts.push(text.slice(i, i + max));
+
+  for (let i = 0; i < text.length; i += size) {
+    parts.push(text.substring(i, i + size));
   }
+
   return parts;
 }
 
-// -------------------- HEALTH CHECK --------------------
+// ==================== HEALTH CHECK ====================
+
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// -------------------- WEBHOOK --------------------
+// ==================== TELEGRAM WEBHOOK ====================
+
 app.post("/webhook", async (req, res) => {
-  const userText = req.body.text;
-  const userId = req.body.userId || "default";
-
-  console.log("Received:", userText);
-
-  if (!userText) return res.sendStatus(400);
-
   try {
-    // -------------------- LOAD MEMORY --------------------
-    let pending = await redis.get(`pending:${userId}`);
-    pending = pending ? JSON.parse(pending) : [];
+    console.log("Incoming update received");
 
-    // add new OCR/text input
-    pending.push(userText);
+    const message = req.body.message;
 
-    console.log(`Pending inputs: ${pending.length}`);
-
-    // -------------------- WAIT FOR MULTIPLE INPUTS --------------------
-    // (you can change 2 → 3 if you want more images per answer)
-    if (pending.length < 2) {
-      await redis.set(`pending:${userId}`, JSON.stringify(pending));
-
-      return res.json({
-        status: "waiting",
-        message: "Input stored. Send next image/question."
-      });
+    // Ignore non-text messages
+    if (!message || !message.text) {
+      console.log("No text message found");
+      return res.sendStatus(200);
     }
 
-    // -------------------- COMBINE INPUTS --------------------
-    const combinedInput = pending.join("\n\n");
+    const chatId = message.chat.id;
+    const userText = message.text;
 
-    // clear memory
-    await redis.del(`pending:${userId}`);
+    console.log("Chat ID:", chatId);
+    console.log("User message:", userText);
 
-    // -------------------- OPENAI REQUEST --------------------
+    // ==================== LOAD CHAT HISTORY ====================
+
+    let history = await redis.get(`chat_${chatId}`);
+    let messages = history ? JSON.parse(history) : [];
+
+    // Add latest user message
+    messages.push({
+      role: "user",
+      content: userText
+    });
+
+    // Keep only last 10 messages
+    messages = messages.slice(-10);
+
+    // ==================== OPENAI REQUEST ====================
+
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -101,43 +121,40 @@ app.post("/webhook", async (req, res) => {
           {
             role: "system",
             content: `
-You are a CIMA exam-grade strategic analyst.
+You are a CIMA exam assistant.
 
-Your goal is HIGH-DEPTH, high-mark answers.
+Your answers MUST follow CIMA marking criteria:
+- Always apply points to Kwirtmak
+- Avoid generic theory
+- Be concise and structured
+- Maximise marks per sentence
 
-RULES:
+Structure:
+1. Heading
+2. Explanation
+3. Application to Kwirtmak
+4. Impact / Evaluation
 
-1. NEVER give shallow answers.
-2. Every point MUST include:
-   - Explanation
-   - Application to Kwirtmak
-   - Strategic impact (SO WHAT)
+Adapt to command words:
+- Evaluate → pros, cons, judgement
+- Recommend → decision + justification
+- Analyse → causes
+- Discuss → balanced view
 
-3. Always show reasoning chains:
-   cause → effect → implication → judgement
+Avoid long paragraphs and repetition.
 
-4. Link ideas across:
-   finance, competition, strategy, sustainability
+Use the reference material below when relevant, but do NOT rely only on it.
+Combine it with your general knowledge.
 
-5. Always include evaluation, not just description.
+Write like a CIMA examiner expects.
 
-6. Think like an examiner awarding marks.
-
-STRUCTURE:
-
-- Clear headings
-- Deep analytical paragraphs
-- Final judgement or recommendation
-
-REFERENCE:
+Reference:
 ${REFERENCE}
             `
           },
-          {
-            role: "user",
-            content: combinedInput
-          }
-        ]
+          ...messages
+        ],
+        temperature: 0.7
       },
       {
         headers: {
@@ -151,30 +168,43 @@ ${REFERENCE}
 
     console.log("GPT answer generated");
 
-    // -------------------- SEND TO TELEGRAM --------------------
+    // ==================== SAVE CHAT HISTORY ====================
+
+    messages.push({
+      role: "assistant",
+      content: answer
+    });
+
+    await redis.set(`chat_${chatId}`, JSON.stringify(messages));
+
+    // ==================== SEND TO TELEGRAM ====================
+
     const parts = splitMessage(answer);
 
-    for (const id of USERS) {
-      for (const part of parts) {
-        await axios.post(
-          `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-          {
-            chat_id: id,
-            text: part
-          }
-        );
-      }
+    for (const part of parts) {
+      await axios.post(
+        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+        {
+          chat_id: chatId,
+          text: part
+        }
+      );
     }
+
+    console.log("Reply sent successfully");
 
     res.sendStatus(200);
 
   } catch (err) {
-    console.error("ERROR:", err.response?.data || err.message);
+    console.error("ERROR:");
+    console.error(err.response?.data || err.message);
+
     res.sendStatus(500);
   }
 });
 
-// -------------------- START SERVER --------------------
+// ==================== START SERVER ====================
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
