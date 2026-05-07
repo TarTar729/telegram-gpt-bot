@@ -7,16 +7,16 @@ app.use(express.json());
 // ================= CONFIG =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = "1807488416"; // 🔥 hardcoded fixed chat
+const TELEGRAM_CHAT_ID = "1807488416"; // fixed chat
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ================= HEALTH =================
 
 app.get("/", (req, res) => {
-  res.send("GPT Shortcut Bot is running");
+  res.send("CIMA GPT Bot is running");
 });
 
-// ================= CLEANING FUNCTION =================
+// ================= CLEANING =================
 
 function cleanText(text) {
   if (!text) return "";
@@ -24,10 +24,32 @@ function cleanText(text) {
   return text
     .replace(/\n{2,}/g, "\n")
     .replace(/PDF/gi, "")
-    .replace(/Q Search/gi, "")
     .replace(/Google Translate/gi, "")
+    .replace(/Q Search/gi, "")
     .replace(/\b[A-Z]\b/g, "")
     .trim();
+}
+
+// ================= SPLIT FUNCTION =================
+
+function splitMessage(text, maxLength = 3500) {
+  const parts = [];
+  let current = "";
+
+  const lines = text.split("\n");
+
+  for (const line of lines) {
+    if ((current + line).length > maxLength) {
+      parts.push(current);
+      current = line + "\n";
+    } else {
+      current += line + "\n";
+    }
+  }
+
+  if (current) parts.push(current);
+
+  return parts;
 }
 
 // ================= WEBHOOK =================
@@ -42,11 +64,12 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Missing text" });
     }
 
+    // CLEAN INPUT
     userText = cleanText(userText);
 
     console.log("Cleaned input:", userText);
 
-    // ================= OPENAI =================
+    // ================= GPT CALL =================
 
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -63,6 +86,8 @@ Write structured answers:
 2. Analysis
 3. Application to case
 4. Evaluation / Conclusion
+
+Be concise but high quality.
             `
           },
           {
@@ -84,16 +109,19 @@ Write structured answers:
 
     console.log("GPT response generated");
 
-    // ================= TELEGRAM SEND =================
+    // ================= TELEGRAM SPLIT SEND =================
 
-    await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-      {
-        chat_id: TELEGRAM_CHAT_ID,
-        text: answer,
-        parse_mode: "Markdown"
-      }
-    );
+    const parts = splitMessage(answer);
+
+    for (const part of parts) {
+      await axios.post(
+        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+        {
+          chat_id: TELEGRAM_CHAT_ID,
+          text: part
+        }
+      );
+    }
 
     console.log("Sent to Telegram");
 
@@ -108,7 +136,7 @@ Write structured answers:
   }
 });
 
-// ================= START =================
+// ================= START SERVER =================
 
 const PORT = process.env.PORT || 3000;
 
