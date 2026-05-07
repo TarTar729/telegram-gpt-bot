@@ -4,35 +4,29 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-// ================= ENV =================
+// ================= CONFIG =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_CHAT_ID = "1807488416"; // 🔥 hardcoded fixed chat
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ================= HEALTH CHECK =================
+// ================= HEALTH =================
 
 app.get("/", (req, res) => {
-  res.send("GPT Shortcut → Telegram Bot is running");
+  res.send("GPT Shortcut Bot is running");
 });
 
-// ================= INPUT CLEANING =================
+// ================= CLEANING FUNCTION =================
 
 function cleanText(text) {
   if (!text) return "";
 
   return text
-    // remove excessive new lines
     .replace(/\n{2,}/g, "\n")
-    // remove common OCR/PDF noise
-    .replace(/Q\s*Search/gi, "")
     .replace(/PDF/gi, "")
+    .replace(/Q Search/gi, "")
     .replace(/Google Translate/gi, "")
-    .replace(/KAPLAN PUBLISHING/gi, "")
-    .replace(/\bPage\s*\d+\b/gi, "")
-    // remove standalone single letters like "N"
     .replace(/\b[A-Z]\b/g, "")
-    // trim
     .trim();
 }
 
@@ -48,12 +42,11 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Missing text" });
     }
 
-    // 🔥 CLEAN INPUT FIRST
     userText = cleanText(userText);
 
     console.log("Cleaned input:", userText);
 
-    // ================= GPT REQUEST =================
+    // ================= OPENAI =================
 
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -65,14 +58,7 @@ app.post("/webhook", async (req, res) => {
             content: `
 You are a CIMA Strategic Case Study (SCS) examiner.
 
-You must:
-- Write structured exam answers
-- Use clear headings
-- Apply analysis to the case
-- Provide evaluation and judgement
-- Be concise but high quality
-
-Structure:
+Write structured answers:
 1. Heading
 2. Analysis
 3. Application to case
@@ -98,7 +84,7 @@ Structure:
 
     console.log("GPT response generated");
 
-    // ================= SEND TO TELEGRAM =================
+    // ================= TELEGRAM SEND =================
 
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
@@ -122,7 +108,7 @@ Structure:
   }
 });
 
-// ================= START SERVER =================
+// ================= START =================
 
 const PORT = process.env.PORT || 3000;
 
