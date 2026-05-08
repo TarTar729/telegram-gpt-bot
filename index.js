@@ -21,7 +21,7 @@ const sessions = {};
 // ================= CLEAN TEXT =================
 
 function cleanText(text = "") {
-  return text.trim();
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // ================= TELEGRAM SEND =================
@@ -32,7 +32,7 @@ async function sendMessage(chatId, text) {
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
       {
         chat_id: chatId,
-        text: text
+        text
       }
     );
   } catch (err) {
@@ -48,12 +48,19 @@ async function askOpenAI(prompt) {
     {
       model: "gpt-4.1-mini",
       temperature: 0.4,
-      max_tokens: 2000,
+      max_tokens: 2500,
       messages: [
         {
           role: "system",
-          content:
-            "You are a CIMA Strategic Case Study expert. Provide deep, structured, analytical answers."
+          content: `
+You are a CIMA Strategic Case Study expert.
+
+Write:
+- structured answer
+- deep commercial analysis
+- applied to Kwirtmak
+- no generic theory
+`
         },
         {
           role: "user",
@@ -77,31 +84,36 @@ async function askOpenAI(prompt) {
 app.post("/webhook", async (req, res) => {
   try {
     console.log("📩 Incoming request");
-    console.log(JSON.stringify(req.body, null, 2)); // IMPORTANT DEBUG
+    console.log(JSON.stringify(req.body, null, 2));
 
     const update = req.body;
 
-    // ================= SAFE MESSAGE EXTRACTION =================
+    // ================= FIX: HANDLE BOTH FORMATS =================
 
-    const message =
-      update.message ||
-      update.edited_message ||
-      update.channel_post;
+    const text =
+      update.text ||
+      update.message?.text ||
+      update.edited_message?.text ||
+      update.channel_post?.text;
 
-    if (!message) {
-      console.log("❌ No message found in update");
+    const chatId =
+      update.chat?.id ||
+      update.message?.chat?.id ||
+      update.edited_message?.chat?.id;
+
+    if (!text) {
+      console.log("❌ No text found");
       return res.sendStatus(200);
     }
 
-    if (!message.text) {
-      console.log("❌ No text in message");
+    if (!chatId) {
+      console.log("❌ No chatId found");
       return res.sendStatus(200);
     }
 
-    const chatId = message.chat.id;
-    const text = cleanText(message.text);
+    const cleanedText = cleanText(text);
 
-    console.log("💬 User text:", text);
+    console.log("💬 User text:", cleanedText);
 
     // ================= SESSION =================
 
@@ -112,7 +124,7 @@ app.post("/webhook", async (req, res) => {
     // ================= FIRST MESSAGE =================
 
     if (!sessions[chatId].first) {
-      sessions[chatId].first = text;
+      sessions[chatId].first = cleanedText;
 
       await sendMessage(
         chatId,
@@ -132,7 +144,7 @@ QUESTION:
 ${first}
 
 EXHIBIT:
-${text}
+${cleanedText}
 `;
 
     await sendMessage(chatId, "🧠 Generating answer...");
