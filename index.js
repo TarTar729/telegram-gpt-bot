@@ -1,17 +1,12 @@
-const express = require("express");
-const axios = require("axios");
+limit: "20mb" }));
 
-const app = express();
-
-app.use(express.json({ limit: "20mb" }));
-
-// ================= ENV =================
+// ================= CONFIG =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
-  throw new Error("Missing env variables");
+  throw new Error("Missing environment variables");
 }
 
 // ================= PRE-SEEN =================
@@ -19,10 +14,10 @@ if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
 const PRESEEN = `
 Kwirtmak is a global manufacturer of industrial 3D printing systems.
 
-Key points:
-- Strong R&D capability
+Key facts:
+- Declining revenue and profitability
 - High debt (E$1.35bn)
-- Declining revenue (E$2.86bn → E$2.32bn)
+- Strong R&D capability
 - Competitor: Breskko (stronger financially)
 
 Medical opportunity:
@@ -42,31 +37,19 @@ function cleanText(text = "") {
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// ================= SPLIT MESSAGE =================
+// ================= TELEGRAM SENDER =================
 
-function splitMessage(text, max = 3500) {
-  const parts = [];
-  while (text.length > max) {
-    parts.push(text.slice(0, max));
-    text = text.slice(max);
-  }
-  parts.push(text);
-  return parts;
-}
-
-// ================= TELEGRAM SEND =================
-
-async function sendMessage(chatId, text) {
-  const parts = splitMessage(text);
-
-  for (const part of parts) {
+async function sendTelegram(chatId, text) {
+  try {
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
       {
         chat_id: chatId,
-        text: part
+        text: text
       }
     );
+  } catch (err) {
+    console.error("Telegram send error:", err.response?.data || err.message);
   }
 }
 
@@ -87,10 +70,9 @@ You are a CIMA Strategic Case Study expert.
 
 Write:
 - deep commercial analysis
-- clear structure
 - applied to Kwirtmak
-- financial + strategic + operational reasoning
-- no generic theory
+- financial + operational + strategic reasoning
+- examiner-level structure
 `
         },
         {
@@ -114,11 +96,23 @@ Write:
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Webhook received");
+    console.log("Incoming request");
 
-    const message = req.body.message;
+    const update = req.body;
+
+    // ❗ BLOCK NON-TELEGRAM REQUESTS
+    if (!update || !update.message) {
+      console.log("Ignored non-Telegram request");
+      return res.sendStatus(200);
+    }
+
+    const message =
+      update.message ||
+      update.edited_message ||
+      update.channel_post;
 
     if (!message || !message.text) {
+      console.log("No valid text message");
       return res.sendStatus(200);
     }
 
@@ -127,11 +121,10 @@ app.post("/webhook", async (req, res) => {
 
     console.log("User message:", text);
 
-    // INIT SESSION
+    // ================= SESSION =================
+
     if (!sessions[chatId]) {
-      sessions[chatId] = {
-        first: null
-      };
+      sessions[chatId] = { first: null };
     }
 
     // ================= FIRST MESSAGE =================
@@ -139,7 +132,7 @@ app.post("/webhook", async (req, res) => {
     if (!sessions[chatId].first) {
       sessions[chatId].first = text;
 
-      await sendMessage(
+      await sendTelegram(
         chatId,
         "📥 First message received. Please send second message."
       );
@@ -150,7 +143,6 @@ app.post("/webhook", async (req, res) => {
     // ================= SECOND MESSAGE =================
 
     const first = sessions[chatId].first;
-
     sessions[chatId].first = null;
 
     const combined = `
@@ -161,32 +153,33 @@ EXHIBIT:
 ${text}
 `;
 
-    await sendMessage(chatId, "🧠 Generating answer...");
+    await sendTelegram(chatId, "🧠 Generating answer...");
 
     console.log("Calling OpenAI...");
 
     const answer = await askOpenAI(combined);
 
-    console.log("OpenAI done");
+    console.log("OpenAI response received");
 
-    await sendMessage(chatId, answer);
+    await sendTelegram(chatId, answer);
+
+    console.log("Response sent to Telegram");
 
     return res.sendStatus(200);
 
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
-
     return res.sendStatus(200);
   }
 });
 
-// ================= HEALTH =================
+// ================= HEALTH CHECK =================
 
 app.get("/", (req, res) => {
-  res.send("Bot running");
+  res.send("Bot is running");
 });
 
-// ================= START =================
+// ================= START SERVER =================
 
 const PORT = process.env.PORT || 3000;
 
