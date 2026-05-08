@@ -1,5 +1,3 @@
-require("dotenv").config();
-
 const express = require("express");
 const axios = require("axios");
 
@@ -8,172 +6,111 @@ const app = express();
 app.use(express.json({ limit: "20mb" }));
 
 // ======================================================
-// ENV
+// ENVIRONMENT VARIABLES
 // ======================================================
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
-if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
-  throw new Error("Missing TELEGRAM_TOKEN or OPENAI_API_KEY");
+if (!OPENAI_API_KEY || !TELEGRAM_TOKEN) {
+  throw new Error(
+    "Missing OPENAI_API_KEY or TELEGRAM_TOKEN environment variables"
+  );
 }
 
 // ======================================================
-// TELEGRAM
-// ======================================================
-
-const TELEGRAM_CHAT_ID = "1807488416";
-
-// ======================================================
-// PRE-SEEN
+// PRE-SEEN MATERIAL
 // ======================================================
 
 const PRESEEN = `
-COMPANY OVERVIEW
-Kwirtmak was founded in 1992 and listed on the Ennland stock exchange in 2004.
+Kwirtmak is a global manufacturer of advanced industrial 3D printers and additive manufacturing systems.
 
-Kwirtmak manufactures advanced industrial 3D printers and additive manufacturing systems.
-
-Its products include:
+Products:
 - extrusion printers
 - stereolithography (SL)
-- digital light processing (DLP)
+- DLP
 - laser melting
-- material jetting printers
+- material jetting
 
-Kwirtmak specialises in commercial-grade printers capable of producing plastic, metal and ceramic components.
+Industries:
+- aerospace
+- automotive
+- consumer electronics
+- jewellery
 
-The company also sells compatible materials for use in its printers.
+Strengths:
+- technical expertise
+- premium quality
+- advanced R&D
+- sustainability positioning
+- global customer base
 
-INDUSTRIES SERVED
-- Aerospace
-- Automotive
-- Consumer electronics
-- Jewellery
+Weaknesses:
+- declining revenue
+- falling profitability
+- high debt
+- competitive pressure from Breskko
+- volatile industrial demand
 
-KEY CUSTOMER NEEDS
-- Cost
-- Speed
-- Accuracy
-- Surface finish
-- Strength
-- Size capability
+Financial Position:
+- revenue declined from E$2.86bn to E$2.32bn
+- profitability declined significantly
+- borrowings remain high at E$1.35bn
+- cash balances declined
+- R&D spending remains significant
 
-COMPETITIVE POSITION
-Kwirtmak competes globally.
-Breskko is its closest competitor and is currently outperforming Kwirtmak financially.
-
-MISSION
+Mission:
 Transform customers through innovation in design and production.
 
-VISION
-To become the leading provider of additive manufacturing solutions in a sustainable manner.
+Vision:
+To become the leading provider of additive manufacturing solutions sustainably.
 
-VALUES
-- Customer-focused innovation
-- Reliability
-- Teamwork
-- Wealth creation
-- Trust in staff
-
-BOARD & GOVERNANCE
-Strong governance structure with:
-- Audit Committee
-- Risk & CSR Committee
-- Remuneration Committee
-- Nomination Committee
-
-KEY PEOPLE
-- Dr David Wallace (CEO): engineering and R&D background
-- Agata Paluch (CFO): finance and accounting specialist
-- Kristina Eder (Operations Director): quality and operations
-- Said Abouchdak (CTO): technical and R&D expertise
-- Ouyang Qi (Marketing Director): B2B sales expertise
-
-KEY RISKS
-- Economic volatility
-- Demand fluctuations
-- Inventory risk
-- Product complexity
-- Software and hardware failures
-- Supplier dependence
-- Legal and compliance exposure
-- Health & safety risk
-- Environmental regulation risk
-
-FINANCIAL POSITION
-2026 revenue fell from E$2.86bn to E$2.32bn.
-Profit fell significantly.
-Bank balances declined.
-Borrowings remain high at E$1.35bn.
-Research spending remains significant.
-
-STRENGTHS
-- Strong technical expertise
-- Premium product quality
-- Strong sustainability positioning
-- Global customer base
-- Advanced R&D capability
-
-WEAKNESSES
-- Declining revenue
-- Falling profitability
-- High debt
-- Competitive pressure from Breskko
-- Exposure to volatile industrial demand
-
-SUSTAINABILITY
-Benefits of 3D printing:
-- lower material waste
-- recycling potential
-- reduced transport emissions
-
-Kwirtmak actively monitors environmental performance and sustainability metrics.
-
-MARKET OPPORTUNITIES
-- Medical 3D printing
-- Carbon fibre applications
-- Aerospace growth
-- Bespoke manufacturing
-- Rapid prototyping demand
-
-MEDICAL INDUSTRY
-Medical use of 3D printing is increasing rapidly:
+Medical sector opportunities include:
 - dental implants
 - artificial limbs
 - surgical guides
 - patient-specific models
 - customised medical devices
 
-Medical applications require:
+Medical manufacturing requires:
 - precision
 - reliability
-- compliance
-- sterile manufacturing conditions
+- regulatory compliance
+- sterile conditions
+
+Key Risks:
+- supplier dependence
+- product complexity
+- hardware/software failure
+- legal exposure
+- environmental regulation
+- operational risk
+- demand volatility
 `;
 
 // ======================================================
-// MEMORY BUFFER
+// MEMORY STORE
 // ======================================================
 
 const sessions = {};
 
 // ======================================================
-// UTILITIES
+// CLEAN INPUT
 // ======================================================
 
 function cleanText(text = "") {
   return text
     .replace(/Google Translate/gi, "")
-    .replace(/Q Search/gi, "")
-    .replace(/PDF/gi, "")
     .replace(/KAPLAN PUBLISHING/gi, "")
-    .replace(/Strategic Case Study Exam/gi, "")
+    .replace(/PDF/gi, "")
     .replace(/No reproduction without prior consent/gi, "")
-    .replace(/\b[A-Z]\b/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+// ======================================================
+// SPLIT TELEGRAM MESSAGE
+// ======================================================
 
 function splitMessage(text, maxLength = 3500) {
   const chunks = [];
@@ -186,6 +123,7 @@ function splitMessage(text, maxLength = 3500) {
     }
 
     chunks.push(text.slice(0, splitIndex));
+
     text = text.slice(splitIndex);
   }
 
@@ -194,15 +132,19 @@ function splitMessage(text, maxLength = 3500) {
   return chunks;
 }
 
-async function sendTelegramMessage(text) {
-  const parts = splitMessage(text);
+// ======================================================
+// SEND TELEGRAM MESSAGE
+// ======================================================
 
-  for (const part of parts) {
+async function sendTelegramMessage(chatId, text) {
+  const chunks = splitMessage(text);
+
+  for (const chunk of chunks) {
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
       {
-        chat_id: TELEGRAM_CHAT_ID,
-        text: part,
+        chat_id: chatId,
+        text: chunk,
         parse_mode: "Markdown"
       }
     );
@@ -210,53 +152,17 @@ async function sendTelegramMessage(text) {
 }
 
 // ======================================================
-// OPENAI CALL
+// OPENAI REQUEST
 // ======================================================
 
-async function generateSCSAnswer(combinedInput) {
-  // ==================================================
-  // STAGE 1 — STRATEGIC ANALYSIS
-  // ==================================================
-
-  const analysisResponse = await axios.post(
+async function callOpenAI(messages, model, temperature, max_tokens) {
+  const response = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     {
-      model: "gpt-4.1",
-      temperature: 0.3,
-      max_tokens: 2500,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are an elite CIMA Strategic Case Study analyst.
-
-PRE-SEEN:
-${PRESEEN}
-
-Your task is ONLY to identify:
-- key strategic issues
-- hidden commercial risks
-- stakeholder concerns
-- financial implications
-- operational implications
-- governance implications
-- implementation barriers
-- strategic opportunities
-
-RULES:
-- Apply everything specifically to Kwirtmak
-- Prioritise commercial reasoning
-- Avoid generic theory
-- Show professional scepticism
-- Think like a board adviser
-- Do NOT write the final answer yet
-`
-        },
-        {
-          role: "user",
-          content: combinedInput
-        }
-      ]
+      model,
+      temperature,
+      max_tokens,
+      messages
     },
     {
       headers: {
@@ -266,117 +172,208 @@ RULES:
     }
   );
 
-  const strategicAnalysis =
-    analysisResponse.data.choices[0].message.content;
+  return response.data.choices[0].message.content;
+}
+
+// ======================================================
+// GENERATE ELITE SCS ANSWER
+// ======================================================
+
+async function generateSCSAnswer(questionInput) {
 
   // ==================================================
-  // STAGE 2 — FULL SCS ANSWER
+  // STAGE 1 — ISSUE IDENTIFICATION
   // ==================================================
 
-  const finalResponse = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
+  const issueMessages = [
     {
-      model: "gpt-4.1",
-      temperature: 0.4,
-      max_tokens: 4000,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are producing a TOP-BAND CIMA Strategic Case Study answer.
+      role: "system",
+      content: `
+You are a senior CIMA Strategic Case Study examiner.
+
+PRE-SEEN:
+${PRESEEN}
+
+TASK:
+Identify the MOST IMPORTANT strategic issues arising from the scenario.
+
+For EACH issue analyse:
+- strategic significance
+- financial implications
+- operational implications
+- stakeholder implications
+- governance implications
+- hidden risks
+- execution concerns
+- urgency
+
+IMPORTANT:
+- Apply everything specifically to Kwirtmak
+- Prioritise commercial reasoning
+- Challenge assumptions
+- Avoid generic theory
+- Think like a board adviser
+- Do NOT write the final answer
+`
+    },
+    {
+      role: "user",
+      content: questionInput
+    }
+  ];
+
+  const identifiedIssues = await callOpenAI(
+    issueMessages,
+    "gpt-4.1-mini",
+    0.2,
+    1800
+  );
+
+  // ==================================================
+  // STAGE 2 — DEEP STRATEGIC EXPANSION
+  // ==================================================
+
+  const expansionMessages = [
+    {
+      role: "system",
+      content: `
+You are preparing a strategic Board briefing paper.
+
+PRE-SEEN:
+${PRESEEN}
+
+Expand the identified issues into deep commercial analysis.
+
+For EACH issue explain:
+- WHY it matters
+- operational consequences
+- financing implications
+- implementation barriers
+- governance concerns
+- stakeholder reactions
+- short-term implications
+- long-term implications
+- strategic trade-offs
+- execution risk
+- mitigation strategies
+- competitive implications
+- sustainability implications
+
+IMPORTANT:
+Do NOT stop analysis after identifying a point.
+
+Fully explain:
+- why the point matters
+- what consequences arise
+- how stakeholders are affected
+- whether implementation is realistic
+- whether financial returns justify the risk
+
+Assume the Board will challenge weak arguments aggressively.
+
+Avoid generic theory.
+Prioritise evaluation and judgement.
+`
+    },
+    {
+      role: "assistant",
+      content: identifiedIssues
+    },
+    {
+      role: "user",
+      content: `
+Expand the strategic issues fully using the scenario.
+`
+    }
+  ];
+
+  const expandedAnalysis = await callOpenAI(
+    expansionMessages,
+    "gpt-4.1-mini",
+    0.3,
+    3000
+  );
+
+  // ==================================================
+  // STAGE 3 — FINAL EXAMINER ANSWER
+  // ==================================================
+
+  const finalMessages = [
+    {
+      role: "system",
+      content: `
+You are writing a TOP-BAND CIMA Strategic Case Study answer.
 
 PRE-SEEN:
 ${PRESEEN}
 
 MANDATORY REQUIREMENTS:
 
-1. Every point must be applied specifically to Kwirtmak.
+- Write like a top 5% SCS candidate
+- Produce board-level commercial reasoning
+- Integrate strategy, finance, governance, operations and risk
+- Apply ALL points specifically to Kwirtmak
+- Prioritise judgement over description
+- Demonstrate professional scepticism
+- Discuss implementation realism
+- Discuss financial consequences in depth
+- Analyse stakeholder impact continuously
+- Evaluate trade-offs thoroughly
 
-2. Integrate:
-- strategy
-- finance
-- governance
-- operations
-- sustainability
-- stakeholder management
-- risk management
-
-3. Every major paragraph must include:
+IMPORTANT:
+Every major paragraph must contain:
 - analysis
 - evaluation
-- commercial reasoning
 - implications
 - judgement
+- strategic relevance
 
-4. Continuously discuss:
-- financial consequences
-- operational impact
-- governance impact
-- strategic fit
-- stakeholder reactions
-- execution risk
+Do NOT produce generic textbook commentary.
 
-5. Demonstrate professional scepticism.
-
-6. Compare with Breskko where strategically useful.
-
-7. Avoid generic textbook discussion.
-
-8. Prioritise depth over brevity.
-
-9. Write like a top-scoring SCS candidate.
-
-REQUIRED STRUCTURE:
+STRUCTURE:
 
 # Executive Summary
 
-# Strategic Issues Identified
+# Key Strategic Issues
 
-# Detailed Strategic Analysis
+# Strategic Evaluation
 
-## Financial Implications
+# Financial and Operational Implications
 
-## Operational Implications
+# Governance and Risk Considerations
 
-## Governance and Risk Implications
+# Stakeholder Impact
 
-## Stakeholder Impact
+# Strategic Recommendation
 
-# Strategic Options
+# Implementation Priorities
 
-# Evaluation of Options
-
-# Recommended Course of Action
-
-# Implementation Risks and Mitigation
-
-# Final Conclusion
+# Conclusion
 `
-        },
-        {
-          role: "assistant",
-          content: strategicAnalysis
-        },
-        {
-          role: "user",
-          content: `
-Using the analysis above, now produce the final examiner-quality SCS answer.
-
-QUESTION + EXHIBITS:
-${combinedInput}
-`
-        }
-      ]
     },
     {
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      }
+      role: "assistant",
+      content: expandedAnalysis
+    },
+    {
+      role: "user",
+      content: `
+Using the strategic analysis above, write the final examiner-quality SCS response.
+
+QUESTION:
+${questionInput}
+`
     }
+  ];
+
+  const finalAnswer = await callOpenAI(
+    finalMessages,
+    "gpt-4.1",
+    0.4,
+    4500
   );
 
-  return finalResponse.data.choices[0].message.content;
+  return finalAnswer;
 }
 
 // ======================================================
@@ -388,110 +385,128 @@ app.get("/", (req, res) => {
 });
 
 // ======================================================
-// WEBHOOK
+// TELEGRAM WEBHOOK
 // ======================================================
 
 app.post("/webhook", async (req, res) => {
+
   try {
-    console.log("Incoming webhook:", req.body);
 
-    const incomingText = cleanText(req.body.text || "");
+    console.log("Incoming webhook");
 
-    if (!incomingText) {
-      return res.status(400).json({
-        error: "No text received"
-      });
+    const message = req.body.message;
+
+    if (!message || !message.text) {
+      return res.sendStatus(200);
     }
 
-    // ==============================================
-    // SESSION INITIALISATION
-    // ==============================================
+    const chatId = message.chat.id;
 
-    const userId = TELEGRAM_CHAT_ID;
+    const incomingText = cleanText(message.text);
 
-    if (!sessions[userId]) {
-      sessions[userId] = {
+    // ==================================================
+    // CREATE SESSION
+    // ==================================================
+
+    if (!sessions[chatId]) {
+      sessions[chatId] = {
         firstMessage: null
       };
     }
 
-    // ==============================================
+    // ==================================================
     // FIRST MESSAGE
-    // ==============================================
+    // ==================================================
 
-    if (!sessions[userId].firstMessage) {
-      sessions[userId].firstMessage = incomingText;
+    if (!sessions[chatId].firstMessage) {
 
-      await sendTelegramMessage(`
+      sessions[chatId].firstMessage = incomingText;
+
+      await sendTelegramMessage(
+        chatId,
+        `
 📥 *First exhibit/question received.*
 
 Please now send:
 - additional exhibit
 - appendices
-- scenario information
-- supporting material
-`);
+- scenario material
+- supporting information
+`
+      );
 
       return res.json({
         status: "waiting_for_second_message"
       });
     }
 
-    // ==============================================
+    // ==================================================
     // SECOND MESSAGE
-    // ==============================================
+    // ==================================================
 
-    const firstInput = sessions[userId].firstMessage;
+    const firstInput = sessions[chatId].firstMessage;
 
     const combinedInput = `
-MAIN REQUIREMENT / QUESTION:
+MAIN REQUIREMENT:
 ${firstInput}
 
-ADDITIONAL EXHIBIT / SUPPORTING MATERIAL:
+SUPPORTING EXHIBIT:
 ${incomingText}
 `;
 
-    // clear memory
-    sessions[userId].firstMessage = null;
+    // clear session
+    sessions[chatId].firstMessage = null;
 
-    // ==============================================
-    // SEND STATUS UPDATE
-    // ==============================================
+    // ==================================================
+    // STATUS UPDATE
+    // ==================================================
 
-    await sendTelegramMessage(`
+    await sendTelegramMessage(
+      chatId,
+      `
 🧠 Generating examiner-quality strategic analysis...
 
-This may take 20-40 seconds.
-`);
+This may take 30-60 seconds.
+`
+    );
 
-    // ==============================================
-    // GENERATE RESPONSE
-    // ==============================================
+    // ==================================================
+    // GENERATE ANSWER
+    // ==================================================
 
     const answer = await generateSCSAnswer(combinedInput);
 
-    // ==============================================
-    // SEND TO TELEGRAM
-    // ==============================================
+    // ==================================================
+    // SEND FINAL ANSWER
+    // ==================================================
 
-    await sendTelegramMessage(answer);
+    await sendTelegramMessage(chatId, answer);
 
     return res.json({
       success: true
     });
 
-  } catch (err) {
+  } catch (error) {
+
     console.error(
       "SERVER ERROR:",
-      err.response?.data || err.message
+      error.response?.data || error.message
     );
 
     try {
-      await sendTelegramMessage(`
-❌ Error generating SCS response.
+
+      if (req.body?.message?.chat?.id) {
+
+        await sendTelegramMessage(
+          req.body.message.chat.id,
+          `
+❌ Error generating response.
 
 Please try again.
-`);
+`
+        );
+      }
+
     } catch (telegramError) {
       console.error("Telegram send failed");
     }
