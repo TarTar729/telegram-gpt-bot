@@ -1,23 +1,32 @@
+require("dotenv").config();
+
 const express = require("express");
 const axios = require("axios");
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
 
-// ================= ENV VARIABLES =================
+app.use(express.json({ limit: "20mb" }));
+
+// ======================================================
+// ENV
+// ======================================================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// YOUR TELEGRAM CHAT ID
+if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
+  throw new Error("Missing TELEGRAM_TOKEN or OPENAI_API_KEY");
+}
+
+// ======================================================
+// TELEGRAM
+// ======================================================
+
 const TELEGRAM_CHAT_ID = "1807488416";
 
-// ================= MESSAGE BUFFER =================
-// waits until 2 messages arrive
-
-let firstMessage = null;
-
-// ================= PRE-SEEN MEMORY =================
+// ======================================================
+// PRE-SEEN
+// ======================================================
 
 const PRESEEN = `
 COMPANY OVERVIEW
@@ -141,25 +150,19 @@ Medical applications require:
 - reliability
 - compliance
 - sterile manufacturing conditions
-
-GENERAL EXAM THEMES
-- Innovation strategy
-- Investment appraisal
-- Risk management
-- Governance
-- Sustainability
-- Competitive strategy
-- Operational performance
-- Financing risk
-- Stakeholder management
-- KPI development
 `;
 
-// ================= CLEAN INPUT =================
+// ======================================================
+// MEMORY BUFFER
+// ======================================================
 
-function cleanText(text) {
-  if (!text) return "";
+const sessions = {};
 
+// ======================================================
+// UTILITIES
+// ======================================================
+
+function cleanText(text = "") {
   return text
     .replace(/Google Translate/gi, "")
     .replace(/Q Search/gi, "")
@@ -172,36 +175,227 @@ function cleanText(text) {
     .trim();
 }
 
-// ================= SPLIT LONG TELEGRAM MESSAGES =================
-
 function splitMessage(text, maxLength = 3500) {
-  const parts = [];
+  const chunks = [];
 
   while (text.length > maxLength) {
-    parts.push(text.slice(0, maxLength));
-    text = text.slice(maxLength);
+    let splitIndex = text.lastIndexOf("\n", maxLength);
+
+    if (splitIndex === -1) {
+      splitIndex = maxLength;
+    }
+
+    chunks.push(text.slice(0, splitIndex));
+    text = text.slice(splitIndex);
   }
 
-  parts.push(text);
+  chunks.push(text);
 
-  return parts;
+  return chunks;
 }
 
-// ================= HEALTH CHECK =================
+async function sendTelegramMessage(text) {
+  const parts = splitMessage(text);
+
+  for (const part of parts) {
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+      {
+        chat_id: TELEGRAM_CHAT_ID,
+        text: part,
+        parse_mode: "Markdown"
+      }
+    );
+  }
+}
+
+// ======================================================
+// OPENAI CALL
+// ======================================================
+
+async function generateSCSAnswer(combinedInput) {
+  // ==================================================
+  // STAGE 1 — STRATEGIC ANALYSIS
+  // ==================================================
+
+  const analysisResponse = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4.1",
+      temperature: 0.3,
+      max_tokens: 2500,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are an elite CIMA Strategic Case Study analyst.
+
+PRE-SEEN:
+${PRESEEN}
+
+Your task is ONLY to identify:
+- key strategic issues
+- hidden commercial risks
+- stakeholder concerns
+- financial implications
+- operational implications
+- governance implications
+- implementation barriers
+- strategic opportunities
+
+RULES:
+- Apply everything specifically to Kwirtmak
+- Prioritise commercial reasoning
+- Avoid generic theory
+- Show professional scepticism
+- Think like a board adviser
+- Do NOT write the final answer yet
+`
+        },
+        {
+          role: "user",
+          content: combinedInput
+        }
+      ]
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  const strategicAnalysis =
+    analysisResponse.data.choices[0].message.content;
+
+  // ==================================================
+  // STAGE 2 — FULL SCS ANSWER
+  // ==================================================
+
+  const finalResponse = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4.1",
+      temperature: 0.4,
+      max_tokens: 4000,
+      messages: [
+        {
+          role: "system",
+          content: `
+You are producing a TOP-BAND CIMA Strategic Case Study answer.
+
+PRE-SEEN:
+${PRESEEN}
+
+MANDATORY REQUIREMENTS:
+
+1. Every point must be applied specifically to Kwirtmak.
+
+2. Integrate:
+- strategy
+- finance
+- governance
+- operations
+- sustainability
+- stakeholder management
+- risk management
+
+3. Every major paragraph must include:
+- analysis
+- evaluation
+- commercial reasoning
+- implications
+- judgement
+
+4. Continuously discuss:
+- financial consequences
+- operational impact
+- governance impact
+- strategic fit
+- stakeholder reactions
+- execution risk
+
+5. Demonstrate professional scepticism.
+
+6. Compare with Breskko where strategically useful.
+
+7. Avoid generic textbook discussion.
+
+8. Prioritise depth over brevity.
+
+9. Write like a top-scoring SCS candidate.
+
+REQUIRED STRUCTURE:
+
+# Executive Summary
+
+# Strategic Issues Identified
+
+# Detailed Strategic Analysis
+
+## Financial Implications
+
+## Operational Implications
+
+## Governance and Risk Implications
+
+## Stakeholder Impact
+
+# Strategic Options
+
+# Evaluation of Options
+
+# Recommended Course of Action
+
+# Implementation Risks and Mitigation
+
+# Final Conclusion
+`
+        },
+        {
+          role: "assistant",
+          content: strategicAnalysis
+        },
+        {
+          role: "user",
+          content: `
+Using the analysis above, now produce the final examiner-quality SCS answer.
+
+QUESTION + EXHIBITS:
+${combinedInput}
+`
+        }
+      ]
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  return finalResponse.data.choices[0].message.content;
+}
+
+// ======================================================
+// HEALTH CHECK
+// ======================================================
 
 app.get("/", (req, res) => {
-  res.send("CIMA SCS Bot running");
+  res.send("Elite CIMA SCS Bot Running");
 });
 
-// ================= MAIN WEBHOOK =================
+// ======================================================
+// WEBHOOK
+// ======================================================
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Raw input:", req.body);
+    console.log("Incoming webhook:", req.body);
 
-    const incomingText = cleanText(req.body.text);
-
-    console.log("Cleaned input:", incomingText);
+    const incomingText = cleanText(req.body.text || "");
 
     if (!incomingText) {
       return res.status(400).json({
@@ -209,127 +403,98 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // ================= FIRST MESSAGE =================
+    // ==============================================
+    // SESSION INITIALISATION
+    // ==============================================
 
-    if (!firstMessage) {
-      firstMessage = incomingText;
+    const userId = TELEGRAM_CHAT_ID;
 
-      console.log("First message stored");
+    if (!sessions[userId]) {
+      sessions[userId] = {
+        firstMessage: null
+      };
+    }
 
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-        {
-          chat_id: TELEGRAM_CHAT_ID,
-          text:
-            "📥 First input received.\n\nPlease send the second message (additional exhibit / reference material)."
-        }
-      );
+    // ==============================================
+    // FIRST MESSAGE
+    // ==============================================
+
+    if (!sessions[userId].firstMessage) {
+      sessions[userId].firstMessage = incomingText;
+
+      await sendTelegramMessage(`
+📥 *First exhibit/question received.*
+
+Please now send:
+- additional exhibit
+- appendices
+- scenario information
+- supporting material
+`);
 
       return res.json({
         status: "waiting_for_second_message"
       });
     }
 
-    // ================= SECOND MESSAGE =================
+    // ==============================================
+    // SECOND MESSAGE
+    // ==============================================
+
+    const firstInput = sessions[userId].firstMessage;
 
     const combinedInput = `
-MAIN TASK / QUESTION:
-${firstMessage}
+MAIN REQUIREMENT / QUESTION:
+${firstInput}
 
-SUPPORTING EXHIBIT / INFORMATION:
+ADDITIONAL EXHIBIT / SUPPORTING MATERIAL:
 ${incomingText}
 `;
 
-    // clear buffer
-    firstMessage = null;
+    // clear memory
+    sessions[userId].firstMessage = null;
 
-    console.log("Sending combined input to GPT");
+    // ==============================================
+    // SEND STATUS UPDATE
+    // ==============================================
 
-    // ================= OPENAI =================
+    await sendTelegramMessage(`
+🧠 Generating examiner-quality strategic analysis...
 
-    const aiRes = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4o-mini",
-        temperature: 0.6,
-        messages: [
-          {
-            role: "system",
-            content: `
-You are a TOP-LEVEL CIMA Strategic Case Study examiner.
+This may take 20-40 seconds.
+`);
 
-Use the following pre-seen knowledge constantly:
+    // ==============================================
+    // GENERATE RESPONSE
+    // ==============================================
 
-${PRESEEN}
+    const answer = await generateSCSAnswer(combinedInput);
 
-REQUIREMENTS:
-- Produce a high-mark SCS answer
-- Use deep commercial reasoning
-- Apply ALL points specifically to Kwirtmak
-- Integrate strategic, financial, operational and governance analysis
-- Avoid generic textbook theory
-- Prioritise evaluation and judgement
-- Discuss stakeholder impact
-- Refer to risks and financial implications where relevant
-- Compare with Breskko where useful
-- Show professional scepticism
+    // ==============================================
+    // SEND TO TELEGRAM
+    // ==============================================
 
-WRITING STYLE:
-- Professional executive tone
-- Dense analytical content
-- Examiner-quality depth
-- Clear business logic
-
-STRUCTURE:
-1. Executive Summary
-2. Main Analysis
-3. Advantages / Opportunities
-4. Risks / Disadvantages
-5. Strategic Evaluation
-6. Recommendation / Conclusion
-
-IMPORTANT:
-Always behave like a real SCS top-scoring candidate.
-`
-          },
-          {
-            role: "user",
-            content: combinedInput
-          }
-        ]
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    const answer = aiRes.data.choices[0].message.content;
-
-    console.log("GPT response generated");
-
-    // ================= SEND TO TELEGRAM =================
-
-    const parts = splitMessage(answer);
-
-    for (const part of parts) {
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-        {
-          chat_id: TELEGRAM_CHAT_ID,
-          text: part
-        }
-      );
-    }
+    await sendTelegramMessage(answer);
 
     return res.json({
       success: true
     });
 
   } catch (err) {
-    console.error("ERROR:", err.response?.data || err.message);
+    console.error(
+      "SERVER ERROR:",
+      err.response?.data || err.message
+    );
+
+    try {
+      await sendTelegramMessage(`
+❌ Error generating SCS response.
+
+Please try again.
+`);
+    } catch (telegramError) {
+      console.error("Telegram send failed");
+    }
 
     return res.status(500).json({
       error: "Internal server error"
@@ -337,7 +502,9 @@ Always behave like a real SCS top-scoring candidate.
   }
 });
 
-// ================= START SERVER =================
+// ======================================================
+// START SERVER
+// ======================================================
 
 const PORT = process.env.PORT || 3000;
 
