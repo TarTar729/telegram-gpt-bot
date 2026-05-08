@@ -2,43 +2,28 @@ const express = require("express");
 const axios = require("axios");
 
 const app = express();
-
 app.use(express.json({ limit: "20mb" }));
-
-// ================= ENV =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
-  throw new Error("Missing env variables");
-}
-
-// ================= MEMORY =================
-
 const sessions = {};
 
-// ================= CLEAN =================
-
-function cleanText(text = "") {
-  return text.trim();
+function clean(text) {
+  return text || "";
 }
 
-// ================= TELEGRAM =================
-
-async function sendMessage(chatId, text) {
+async function send(chatId, text) {
   await axios.post(
     `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
     {
       chat_id: chatId,
-      text: text
+      text
     }
   );
 }
 
-// ================= OPENAI =================
-
-async function askAI(prompt) {
+async function ask(prompt) {
   const res = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     {
@@ -46,10 +31,6 @@ async function askAI(prompt) {
       temperature: 0.4,
       max_tokens: 2000,
       messages: [
-        {
-          role: "system",
-          content: "You are a CIMA exam expert. Be detailed and analytical."
-        },
         {
           role: "user",
           content: prompt
@@ -66,71 +47,44 @@ async function askAI(prompt) {
   return res.data.choices[0].message.content;
 }
 
-// ================= WEBHOOK =================
-
 app.post("/webhook", async (req, res) => {
   try {
-    const message = req.body.message;
+    const msg = req.body.message;
 
-    if (!message || !message.text) {
-      return res.sendStatus(200);
-    }
+    if (!msg || !msg.text) return res.sendStatus(200);
 
-    const chatId = message.chat.id;
-    const text = cleanText(message.text);
+    const chatId = msg.chat.id;
+    const text = clean(msg.text);
 
-    if (!sessions[chatId]) {
-      sessions[chatId] = { first: null };
-    }
+    if (!sessions[chatId]) sessions[chatId] = {};
 
-    // FIRST MESSAGE
     if (!sessions[chatId].first) {
       sessions[chatId].first = text;
 
-      await sendMessage(
-        chatId,
-        "📥 First message received. Send second message."
-      );
-
+      await send(chatId, "Send second message.");
       return res.sendStatus(200);
     }
 
-    // SECOND MESSAGE
     const first = sessions[chatId].first;
     sessions[chatId].first = null;
 
-    const combined = `
-QUESTION:
-${first}
+    const prompt = `Q: ${first}\n\nEXHIBIT: ${text}`;
 
-EXHIBIT:
-${text}
-`;
+    await send(chatId, "Thinking...");
 
-    await sendMessage(chatId, "🧠 Generating answer...");
+    const answer = await ask(prompt);
 
-    const answer = await askAI(combined);
-
-    await sendMessage(chatId, answer);
+    await send(chatId, answer);
 
     return res.sendStatus(200);
 
-  } catch (err) {
-    console.error(err.message);
+  } catch (e) {
+    console.log(e.message);
     return res.sendStatus(200);
   }
 });
 
-// ================= HEALTH =================
-
-app.get("/", (req, res) => {
-  res.send("Bot running");
-});
-
-// ================= START =================
+app.get("/", (req, res) => res.send("OK"));
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+app.listen(PORT, () => console.log("Running on", PORT));
