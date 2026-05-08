@@ -1,79 +1,54 @@
-limit: "20mb" }));
+const express = require("express");
+const axios = require("axios");
 
-// ================= CONFIG =================
+const app = express();
+
+app.use(express.json({ limit: "20mb" }));
+
+// ================= ENV =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
-  throw new Error("Missing environment variables");
+  throw new Error("Missing env variables");
 }
-
-// ================= PRE-SEEN =================
-
-const PRESEEN = `
-Kwirtmak is a global manufacturer of industrial 3D printing systems.
-
-Key facts:
-- Declining revenue and profitability
-- High debt (E$1.35bn)
-- Strong R&D capability
-- Competitor: Breskko (stronger financially)
-
-Medical opportunity:
-- E$10bn market potential
-- Requires sterile dedicated facility
-- High regulatory complexity
-- High entry cost (E$2bn)
-`;
 
 // ================= MEMORY =================
 
 const sessions = {};
 
-// ================= CLEAN TEXT =================
+// ================= CLEAN =================
 
 function cleanText(text = "") {
-  return text.replace(/\n{3,}/g, "\n\n").trim();
+  return text.trim();
 }
 
-// ================= TELEGRAM SENDER =================
+// ================= TELEGRAM =================
 
-async function sendTelegram(chatId, text) {
-  try {
-    await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-      {
-        chat_id: chatId,
-        text: text
-      }
-    );
-  } catch (err) {
-    console.error("Telegram send error:", err.response?.data || err.message);
-  }
+async function sendMessage(chatId, text) {
+  await axios.post(
+    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+    {
+      chat_id: chatId,
+      text: text
+    }
+  );
 }
 
 // ================= OPENAI =================
 
-async function askOpenAI(prompt) {
+async function askAI(prompt) {
   const res = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     {
       model: "gpt-4.1-mini",
       temperature: 0.4,
-      max_tokens: 2500,
+      max_tokens: 2000,
       messages: [
         {
           role: "system",
-          content: `
-You are a CIMA Strategic Case Study expert.
-
-Write:
-- deep commercial analysis
-- applied to Kwirtmak
-- financial + operational + strategic reasoning
-- examiner-level structure
-`
+          content: "You are a CIMA exam expert. Be detailed and analytical."
         },
         {
           role: "user",
@@ -83,8 +58,7 @@ Write:
     },
     {
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
+        Authorization: `Bearer ${OPENAI_API_KEY}`
       }
     }
   );
@@ -96,52 +70,32 @@ Write:
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("Incoming request");
-
-    const update = req.body;
-
-    // ❗ BLOCK NON-TELEGRAM REQUESTS
-    if (!update || !update.message) {
-      console.log("Ignored non-Telegram request");
-      return res.sendStatus(200);
-    }
-
-    const message =
-      update.message ||
-      update.edited_message ||
-      update.channel_post;
+    const message = req.body.message;
 
     if (!message || !message.text) {
-      console.log("No valid text message");
       return res.sendStatus(200);
     }
 
     const chatId = message.chat.id;
     const text = cleanText(message.text);
 
-    console.log("User message:", text);
-
-    // ================= SESSION =================
-
     if (!sessions[chatId]) {
       sessions[chatId] = { first: null };
     }
 
-    // ================= FIRST MESSAGE =================
-
+    // FIRST MESSAGE
     if (!sessions[chatId].first) {
       sessions[chatId].first = text;
 
-      await sendTelegram(
+      await sendMessage(
         chatId,
-        "📥 First message received. Please send second message."
+        "📥 First message received. Send second message."
       );
 
       return res.sendStatus(200);
     }
 
-    // ================= SECOND MESSAGE =================
-
+    // SECOND MESSAGE
     const first = sessions[chatId].first;
     sessions[chatId].first = null;
 
@@ -153,33 +107,27 @@ EXHIBIT:
 ${text}
 `;
 
-    await sendTelegram(chatId, "🧠 Generating answer...");
+    await sendMessage(chatId, "🧠 Generating answer...");
 
-    console.log("Calling OpenAI...");
+    const answer = await askAI(combined);
 
-    const answer = await askOpenAI(combined);
-
-    console.log("OpenAI response received");
-
-    await sendTelegram(chatId, answer);
-
-    console.log("Response sent to Telegram");
+    await sendMessage(chatId, answer);
 
     return res.sendStatus(200);
 
   } catch (err) {
-    console.error("ERROR:", err.response?.data || err.message);
+    console.error(err.message);
     return res.sendStatus(200);
   }
 });
 
-// ================= HEALTH CHECK =================
+// ================= HEALTH =================
 
 app.get("/", (req, res) => {
-  res.send("Bot is running");
+  res.send("Bot running");
 });
 
-// ================= START SERVER =================
+// ================= START =================
 
 const PORT = process.env.PORT || 3000;
 
