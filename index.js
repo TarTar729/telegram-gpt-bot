@@ -2,28 +2,47 @@ const express = require("express");
 const axios = require("axios");
 
 const app = express();
+
 app.use(express.json({ limit: "20mb" }));
+
+// ================= ENV =================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
+if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
+  throw new Error("Missing TELEGRAM_TOKEN or OPENAI_API_KEY");
+}
+
+// ================= MEMORY =================
+
 const sessions = {};
 
-function clean(text) {
-  return text || "";
+// ================= CLEAN TEXT =================
+
+function cleanText(text = "") {
+  return text.trim();
 }
 
-async function send(chatId, text) {
-  await axios.post(
-    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-    {
-      chat_id: chatId,
-      text
-    }
-  );
+// ================= TELEGRAM SEND =================
+
+async function sendMessage(chatId, text) {
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+      {
+        chat_id: chatId,
+        text: text
+      }
+    );
+  } catch (err) {
+    console.log("Telegram error:", err.response?.data || err.message);
+  }
 }
 
-async function ask(prompt) {
+// ================= OPENAI =================
+
+async function askOpenAI(prompt) {
   const res = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     {
@@ -32,6 +51,11 @@ async function ask(prompt) {
       max_tokens: 2000,
       messages: [
         {
+          role: "system",
+          content:
+            "You are a CIMA Strategic Case Study expert. Provide deep, structured, analytical answers."
+        },
+        {
           role: "user",
           content: prompt
         }
@@ -39,7 +63,8 @@ async function ask(prompt) {
     },
     {
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
       }
     }
   );
@@ -47,44 +72,99 @@ async function ask(prompt) {
   return res.data.choices[0].message.content;
 }
 
+// ================= WEBHOOK =================
+
 app.post("/webhook", async (req, res) => {
   try {
-    const msg = req.body.message;
+    console.log("📩 Incoming request");
+    console.log(JSON.stringify(req.body, null, 2)); // IMPORTANT DEBUG
 
-    if (!msg || !msg.text) return res.sendStatus(200);
+    const update = req.body;
 
-    const chatId = msg.chat.id;
-    const text = clean(msg.text);
+    // ================= SAFE MESSAGE EXTRACTION =================
 
-    if (!sessions[chatId]) sessions[chatId] = {};
+    const message =
+      update.message ||
+      update.edited_message ||
+      update.channel_post;
+
+    if (!message) {
+      console.log("❌ No message found in update");
+      return res.sendStatus(200);
+    }
+
+    if (!message.text) {
+      console.log("❌ No text in message");
+      return res.sendStatus(200);
+    }
+
+    const chatId = message.chat.id;
+    const text = cleanText(message.text);
+
+    console.log("💬 User text:", text);
+
+    // ================= SESSION =================
+
+    if (!sessions[chatId]) {
+      sessions[chatId] = { first: null };
+    }
+
+    // ================= FIRST MESSAGE =================
 
     if (!sessions[chatId].first) {
       sessions[chatId].first = text;
 
-      await send(chatId, "Send second message.");
+      await sendMessage(
+        chatId,
+        "📥 First message received. Now send second message."
+      );
+
       return res.sendStatus(200);
     }
+
+    // ================= SECOND MESSAGE =================
 
     const first = sessions[chatId].first;
     sessions[chatId].first = null;
 
-    const prompt = `Q: ${first}\n\nEXHIBIT: ${text}`;
+    const combinedPrompt = `
+QUESTION:
+${first}
 
-    await send(chatId, "Thinking...");
+EXHIBIT:
+${text}
+`;
 
-    const answer = await ask(prompt);
+    await sendMessage(chatId, "🧠 Generating answer...");
 
-    await send(chatId, answer);
+    console.log("🤖 Calling OpenAI...");
+
+    const answer = await askOpenAI(combinedPrompt);
+
+    console.log("✅ OpenAI response received");
+
+    await sendMessage(chatId, answer);
+
+    console.log("📤 Answer sent");
 
     return res.sendStatus(200);
 
-  } catch (e) {
-    console.log(e.message);
+  } catch (err) {
+    console.log("❌ ERROR:", err.response?.data || err.message);
     return res.sendStatus(200);
   }
 });
 
-app.get("/", (req, res) => res.send("OK"));
+// ================= HEALTH =================
+
+app.get("/", (req, res) => {
+  res.send("Bot is running");
+});
+
+// ================= START =================
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Running on", PORT));
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
