@@ -18,13 +18,13 @@ if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
 
 const sessions = {};
 
-// ================= CLEAN TEXT =================
+// ================= UTIL =================
 
 function cleanText(text = "") {
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// ================= TELEGRAM SEND =================
+// ================= TELEGRAM =================
 
 async function sendMessage(chatId, text) {
   try {
@@ -32,7 +32,7 @@ async function sendMessage(chatId, text) {
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
       {
         chat_id: chatId,
-        text
+        text: text
       }
     );
   } catch (err) {
@@ -52,15 +52,8 @@ async function askOpenAI(prompt) {
       messages: [
         {
           role: "system",
-          content: `
-You are a CIMA Strategic Case Study expert.
-
-Write:
-- structured answer
-- deep commercial analysis
-- applied to Kwirtmak
-- no generic theory
-`
+          content:
+            "You are a CIMA Strategic Case Study expert. Produce structured, analytical, examiner-level answers."
         },
         {
           role: "user",
@@ -83,12 +76,12 @@ Write:
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("📩 Incoming request");
+    console.log("📩 Incoming request:");
     console.log(JSON.stringify(req.body, null, 2));
 
     const update = req.body;
 
-    // ================= FIX: HANDLE BOTH FORMATS =================
+    // ================= EXTRACT TEXT =================
 
     const text =
       update.text ||
@@ -96,18 +89,22 @@ app.post("/webhook", async (req, res) => {
       update.edited_message?.text ||
       update.channel_post?.text;
 
+    // ================= EXTRACT CHAT ID =================
+
     const chatId =
       update.chat?.id ||
       update.message?.chat?.id ||
       update.edited_message?.chat?.id;
 
-    if (!text) {
-      console.log("❌ No text found");
+    // ❌ If no chatId → cannot reply
+    if (!chatId) {
+      console.log("❌ No chatId found");
       return res.sendStatus(200);
     }
 
-    if (!chatId) {
-      console.log("❌ No chatId found");
+    // ❌ If no text → ignore
+    if (!text) {
+      console.log("❌ No text found");
       return res.sendStatus(200);
     }
 
@@ -139,7 +136,7 @@ app.post("/webhook", async (req, res) => {
     const first = sessions[chatId].first;
     sessions[chatId].first = null;
 
-    const combinedPrompt = `
+    const prompt = `
 QUESTION:
 ${first}
 
@@ -151,7 +148,7 @@ ${cleanedText}
 
     console.log("🤖 Calling OpenAI...");
 
-    const answer = await askOpenAI(combinedPrompt);
+    const answer = await askOpenAI(prompt);
 
     console.log("✅ OpenAI response received");
 
@@ -167,13 +164,13 @@ ${cleanedText}
   }
 });
 
-// ================= HEALTH =================
+// ================= HEALTH CHECK =================
 
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// ================= START =================
+// ================= START SERVER =================
 
 const PORT = process.env.PORT || 3000;
 
