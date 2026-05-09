@@ -10,29 +10,30 @@ app.use(express.json({ limit: "20mb" }));
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-if (!TELEGRAM_TOKEN || !OPENAI_API_KEY) {
-  throw new Error("Missing TELEGRAM_TOKEN or OPENAI_API_KEY");
-}
+// YOUR TELEGRAM CHAT ID
+const TELEGRAM_CHAT_ID = "1807488416";
 
 // ================= MEMORY =================
 
-const sessions = {};
+let firstMessage = null;
 
-// ================= UTIL =================
+// ================= CLEAN =================
 
 function cleanText(text = "") {
-  return text.replace(/\n{3,}/g, "\n\n").trim();
+  return text
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
-// ================= TELEGRAM =================
+// ================= TELEGRAM SEND =================
 
-async function sendMessage(chatId, text) {
+async function sendMessage(text) {
   try {
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
       {
-        chat_id: chatId,
-        text: text
+        chat_id: TELEGRAM_CHAT_ID,
+        text
       }
     );
   } catch (err) {
@@ -52,8 +53,19 @@ async function askOpenAI(prompt) {
       messages: [
         {
           role: "system",
-          content:
-            "You are a CIMA Strategic Case Study expert. Produce structured, analytical, examiner-level answers."
+          content: `
+You are a top-performing CIMA Strategic Case Study candidate.
+
+Requirements:
+- deep analysis
+- commercial judgement
+- strategic evaluation
+- financial implications
+- stakeholder analysis
+- risks and opportunities
+- specific application to Kwirtmak
+- no generic theory
+`
         },
         {
           role: "user",
@@ -79,30 +91,8 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Incoming request:");
     console.log(JSON.stringify(req.body, null, 2));
 
-    const update = req.body;
+    const text = req.body.text;
 
-    // ================= EXTRACT TEXT =================
-
-    const text =
-      update.text ||
-      update.message?.text ||
-      update.edited_message?.text ||
-      update.channel_post?.text;
-
-    // ================= EXTRACT CHAT ID =================
-
-    const chatId =
-      update.chat?.id ||
-      update.message?.chat?.id ||
-      update.edited_message?.chat?.id;
-
-    // ❌ If no chatId → cannot reply
-    if (!chatId) {
-      console.log("❌ No chatId found");
-      return res.sendStatus(200);
-    }
-
-    // ❌ If no text → ignore
     if (!text) {
       console.log("❌ No text found");
       return res.sendStatus(200);
@@ -110,22 +100,15 @@ app.post("/webhook", async (req, res) => {
 
     const cleanedText = cleanText(text);
 
-    console.log("💬 User text:", cleanedText);
-
-    // ================= SESSION =================
-
-    if (!sessions[chatId]) {
-      sessions[chatId] = { first: null };
-    }
+    console.log("💬 Text received");
 
     // ================= FIRST MESSAGE =================
 
-    if (!sessions[chatId].first) {
-      sessions[chatId].first = cleanedText;
+    if (!firstMessage) {
+      firstMessage = cleanedText;
 
       await sendMessage(
-        chatId,
-        "📥 First message received. Now send second message."
+        "📥 First message received. Please send second message."
       );
 
       return res.sendStatus(200);
@@ -133,18 +116,17 @@ app.post("/webhook", async (req, res) => {
 
     // ================= SECOND MESSAGE =================
 
-    const first = sessions[chatId].first;
-    sessions[chatId].first = null;
-
     const prompt = `
 QUESTION:
-${first}
+${firstMessage}
 
 EXHIBIT:
 ${cleanedText}
 `;
 
-    await sendMessage(chatId, "🧠 Generating answer...");
+    firstMessage = null;
+
+    await sendMessage("🧠 Generating answer...");
 
     console.log("🤖 Calling OpenAI...");
 
@@ -152,7 +134,16 @@ ${cleanedText}
 
     console.log("✅ OpenAI response received");
 
-    await sendMessage(chatId, answer);
+    // Telegram message size protection
+    const chunks = [];
+
+    for (let i = 0; i < answer.length; i += 3500) {
+      chunks.push(answer.slice(i, i + 3500));
+    }
+
+    for (const chunk of chunks) {
+      await sendMessage(chunk);
+    }
 
     console.log("📤 Answer sent");
 
@@ -164,13 +155,13 @@ ${cleanedText}
   }
 });
 
-// ================= HEALTH CHECK =================
+// ================= HEALTH =================
 
 app.get("/", (req, res) => {
   res.send("Bot is running");
 });
 
-// ================= START SERVER =================
+// ================= START =================
 
 const PORT = process.env.PORT || 3000;
 
